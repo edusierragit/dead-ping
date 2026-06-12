@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DEAD PING</title>
+</head>
+<body>
+  <div id="app">
+    <div id="scopeWrap">
+      <canvas id="scope"></canvas>
+      <div class="crt"></div>
+      <div id="tremorVignette"></div>
+    </div>
+    <aside id="panel">
+      <header class="brand">
+        <h1>DEAD PING</h1>
+        <div class="sub">HUNTER-KILLER PROTOCOL // TRENCH DUEL</div>
+      </header>
+      <section class="bars">
+        <div class="bar"><label>HULL</label><div id="hullPlayer" class="pips"></div></div>
+        <div class="bar"><label>CONTACT</label><div id="hullEnemy" class="pips enemy"></div></div>
+      </section>
+      <section class="status">
+        <span id="turnLabel">T-01</span>
+        <span id="tubeLabel" class="ok">TUBE READY</span>
+        <span id="decoyLabel">DECOYS ◆◆</span>
+        <span id="pressureLabel"></span>
+      </section>
+      <section id="actions"></section>
+      <div id="hint"></div>
+      <div id="log"></div>
+    </aside>
+  </div>
+  <div id="overlay" class="hidden"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
