@@ -7,11 +7,17 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "sim": "tsx scripts/sim.ts"
+    "sim": "tsx scripts/sim.ts",
+    "e2e": "tsx scripts/e2e.ts"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
+    "@types/node": "^25.9.3",
+    "puppeteer-core": "^25.1.0",
     "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
     "vite": "^6.0.5"
+  },
+  "dependencies": {
+    "trystero": "^0.25.2"
   }
 }

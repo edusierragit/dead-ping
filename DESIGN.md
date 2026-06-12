@@ -62,6 +62,13 @@ Capa de comportamiento: caza con EV de daño esperado, evade cuando se sabe expu
 Multiplayer/red, clases de submarinos, campaña, meta-progresión, mapas procedurales complejos,
 mobile, arte externo, niveles de dificultad. Primero tiene que ser divertido un duelo.
 
-## Crecimiento futuro (si la slice funciona)
-Multiplayer async (el diseño simultáneo ya lo soporta), loadouts de módulos (1 slot: torpedo
-guiado / silencio total / doble decoy), daily trench con seed compartida, modo 2v2.
+## Online (implementado en iteración 2)
+1v1 humano vs humano via WebRTC P2P (trystero, señalización nostr, cero servidor propio).
+Sala por código de 4 letras. Lockstep determinista: el host manda una seed, ambos clientes
+corren reglas idénticas con el mismo rng y solo intercambian acciones por turno. La revancha
+la dispara el host con una seed nueva. Verificado con E2E real (`npm run e2e`): dos pestañas,
+3 turnos lockstep, snapshots de estado idénticos en ambos lados.
+
+## Crecimiento futuro
+Loadouts de módulos (1 slot: torpedo guiado / silencio total / doble decoy), daily trench
+con seed compartida, ranking online persistente, modo 2v2, matchmaking público.

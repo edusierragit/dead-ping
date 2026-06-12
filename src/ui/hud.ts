@@ -1,12 +1,12 @@
-import { ActionType, HULL_MAX, MatchState, PRESSURE_HARD, PRESSURE_SOFT } from '../game/types';
+import { ActionType, HULL_MAX, MatchState, PRESSURE_HARD, PRESSURE_SOFT, Side } from '../game/types';
 
 export const ACTIONS: { type: ActionType; key: string; name: string; desc: string }[] = [
-  { type: 'drift', key: '1', name: 'DRIFT', desc: 'move 1 · silent' },
-  { type: 'dash', key: '2', name: 'DASH', desc: 'move 2-3 straight · loud' },
-  { type: 'listen', key: '3', name: 'LISTEN', desc: 'hold · hear their bearing' },
-  { type: 'ping', key: '4', name: 'PING', desc: 'see them · they hear you' },
-  { type: 'torpedo', key: '5', name: 'TORPEDO', desc: 'fire ≤4 · 3-turn reload' },
-  { type: 'decoy', key: '6', name: 'DECOY', desc: 'drop fake noise · slip away' },
+  { type: 'drift', key: '1', name: 'DERIVA', desc: 'moverse 1 · silencioso' },
+  { type: 'dash', key: '2', name: 'ACELERÓN', desc: 'moverse 2-3 recto · ruidoso' },
+  { type: 'listen', key: '3', name: 'ESCUCHAR', desc: 'quieto · oís su rumbo' },
+  { type: 'ping', key: '4', name: 'PING', desc: 'lo ves exacto · te escuchan' },
+  { type: 'torpedo', key: '5', name: 'TORPEDO', desc: 'disparo ≤4 · recarga 3 turnos' },
+  { type: 'decoy', key: '6', name: 'SEÑUELO', desc: 'ruido falso · te escabullís' },
 ];
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -40,20 +40,20 @@ function pips(el: HTMLElement, val: number) {
   }
 }
 
-export function refresh(state: MatchState, enemyKnown: number, avail: Record<ActionType, boolean>) {
-  pips($('hullPlayer'), state.subs.player.hull);
+export function refresh(state: MatchState, mySide: Side, enemyKnown: number, avail: Record<ActionType, boolean>) {
+  pips($('hullPlayer'), state.subs[mySide].hull);
   pips($('hullEnemy'), enemyKnown);
   $('turnLabel').textContent = `T-${String(state.turn + 1).padStart(2, '0')}`;
   const next = state.turn + 1;
   const pl = $('pressureLabel');
-  pl.textContent = next >= PRESSURE_HARD ? 'PRESSURE: CRITICAL' : next >= PRESSURE_SOFT ? 'PRESSURE: RISING' : '';
+  pl.textContent = next >= PRESSURE_HARD ? 'PRESIÓN: CRÍTICA' : next >= PRESSURE_SOFT ? 'PRESIÓN: SUBIENDO' : '';
   pl.className = next >= PRESSURE_HARD ? 'crit' : next >= PRESSURE_SOFT ? 'warn' : '';
-  const cd = state.subs.player.cooldown;
+  const cd = state.subs[mySide].cooldown;
   const tube = $('tubeLabel');
-  tube.textContent = cd > 0 ? `RELOADING [${cd}]` : 'TUBE READY';
+  tube.textContent = cd > 0 ? `RECARGA [${cd}]` : 'TUBO LISTO';
   tube.className = cd > 0 ? 'warn' : 'ok';
-  const dc = state.subs.player.decoysLeft;
-  $('decoyLabel').textContent = 'DECOYS ' + '◆'.repeat(dc) + '◇'.repeat(2 - dc);
+  const dc = state.subs[mySide].decoysLeft;
+  $('decoyLabel').textContent = 'SEÑUELOS ' + '◆'.repeat(dc) + '◇'.repeat(2 - dc);
   for (const a of ACTIONS) {
     ($(`act-${a.type}`) as HTMLButtonElement).disabled = !avail[a.type];
   }

@@ -1,4 +1,4 @@
-import { Bloom, GRID, MatchState, Vec, neighbors } from '../game/types';
+import { Bloom, GRID, MatchState, Side, Vec, neighbors, other } from '../game/types';
 
 export interface View {
   contacts: Bloom[];
@@ -28,6 +28,7 @@ export class Scope {
   private ctx: CanvasRenderingContext2D;
   private canvas: HTMLCanvasElement;
   state: MatchState | null = null;
+  mySide: Side = 'player';
   view: View = emptyView();
   fx: Fx[] = [];
   targets: { cells: Vec[]; kind: 'move' | 'fire' } | null = null;
@@ -78,6 +79,15 @@ export class Scope {
     bg.addColorStop(1, '#020608');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, SIZE, SIZE);
+
+    // marine snow: slow drifting motes give the water depth
+    for (let i = 0; i < 46; i++) {
+      const speed = 4 + hash(i * 13) * 10;
+      const x = (((hash(i * 3 + 1) * SIZE + now * 0.003 * (hash(i) - 0.5) * 8) % SIZE) + SIZE) % SIZE;
+      const y = (((hash(i * 7 + 2) * SIZE + now * speed / 1000) % SIZE) + SIZE) % SIZE;
+      ctx.fillStyle = `rgba(160,220,200,${0.03 + hash(i * 17) * 0.07})`;
+      ctx.fillRect(x, y, 1.5, 1.5);
+    }
 
     const s = this.state;
     if (!s) {
@@ -246,7 +256,7 @@ export class Scope {
     }
 
     // player position (with move animation)
-    let pp = this.center(s.subs.player.pos);
+    let pp = this.center(s.subs[this.mySide].pos);
     const anim = this.view.subAnim;
     if (anim) {
       const t = Math.min(1, (now - anim.start) / anim.dur);
@@ -263,21 +273,29 @@ export class Scope {
       const alpha = Math.max(0, 1 - age / 2);
       if (alpha > 0) {
         const a = (this.view.bearing.octant * 45 - 90) * Math.PI / 180;
-        const g = ctx.createRadialGradient(pp.x, pp.y, 8, pp.x, pp.y, SIZE * 0.6);
-        g.addColorStop(0, `rgba(200,255,160,${alpha * 0.26})`);
+        const reach = SIZE * 0.42;
+        const g = ctx.createRadialGradient(pp.x, pp.y, 8, pp.x, pp.y, reach);
+        g.addColorStop(0, `rgba(200,255,160,${alpha * 0.18})`);
         g.addColorStop(1, 'rgba(200,255,160,0)');
         ctx.fillStyle = g;
         ctx.beginPath();
         ctx.moveTo(pp.x, pp.y);
-        ctx.arc(pp.x, pp.y, SIZE * 0.6, a - 0.4, a + 0.4);
+        ctx.arc(pp.x, pp.y, reach, a - 0.4, a + 0.4);
         ctx.closePath();
         ctx.fill();
+        ctx.strokeStyle = `rgba(200,255,160,${alpha * 0.25})`;
+        ctx.setLineDash([4, 6]);
+        ctx.beginPath();
+        ctx.moveTo(pp.x, pp.y);
+        ctx.lineTo(pp.x + Math.cos(a) * reach, pp.y + Math.sin(a) * reach);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
 
     // own decoys
     for (const d of s.decoys) {
-      if (d.owner !== 'player') continue;
+      if (d.owner !== this.mySide) continue;
       const p = this.center(d.pos);
       ctx.strokeStyle = 'rgba(110,255,176,0.55)';
       ctx.setLineDash([3, 3]);
@@ -309,7 +327,7 @@ export class Scope {
 
     // enemy revealed only when the match ends
     if (s.result) {
-      const ep = this.center(s.subs.enemy.pos);
+      const ep = this.center(s.subs[other(this.mySide)].pos);
       ctx.save();
       ctx.translate(ep.x, ep.y);
       ctx.shadowColor = 'rgba(255,87,71,0.9)';
