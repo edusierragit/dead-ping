@@ -31,6 +31,11 @@ let joinTimeout = 0;
 let phase: 'deploy' | 'play' = 'play';
 let mySpawn: Vec | null = null;
 let theirSpawn: Vec | null = null;
+let myNoise = 0; // how loud you've been lately (0-3), decays each turn
+let myNick = 'CAZADOR';
+let theirNick = 'RIVAL';
+let roomScore = { me: 0, them: 0 };
+try { myNick = localStorage.getItem('deadping.nick') || 'CAZADOR'; } catch { /* ok */ }
 
 const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
@@ -76,7 +81,8 @@ function defaultHint() {
 }
 
 function modeBase() {
-  return mode === 'online' ? `VS HUMANO · ${net?.code ?? ''}` : 'VS ABISMO';
+  if (mode !== 'online') return 'VS ABISMO';
+  return `${myNick} ${roomScore.me}–${roomScore.them} ${theirNick} · ${net?.code ?? ''}`;
 }
 
 function availability(s: MatchState): Record<ActionType, boolean> {
@@ -97,7 +103,7 @@ function refreshHud() {
   const avail = phase === 'play'
     ? availability(state)
     : { drift: false, dash: false, listen: false, ping: false, torpedo: false, decoy: false };
-  hud.refresh(state, mySide, enemyKnown, avail);
+  hud.refresh(state, mySide, enemyKnown, myNoise, avail);
 }
 
 function cancelTargeting() {
@@ -159,11 +165,13 @@ function commit(action: Action) {
     if (remoteAction && remoteAction.turn === state.turn + 1) {
       resolveNet();
     } else {
-      hud.hint('— esperando al otro cazador —');
+      hud.setTurnState('waiting');
+      hud.hint('');
     }
     return;
   }
-  hud.hint('— resolviendo —');
+  hud.setTurnState('resolving');
+  hud.hint('');
   const enemyAction = brain!.decide(state, sharedRng);
   const report = resolveTurn(state, { player: action, enemy: enemyAction }, sharedRng);
   brain!.observe(state, report);
@@ -178,7 +186,8 @@ function resolveNet() {
   localAction = null;
   remoteAction = null;
   hud.setMode(modeBase());
-  hud.hint('— resolviendo —');
+  hud.setTurnState('resolving');
+  hud.hint('');
   const report = resolveTurn(state, actions, sharedRng);
   playReport(report);
 }
@@ -196,6 +205,11 @@ function playReport(r: TurnReport) {
   }
 
   const pa = r.actions[MY];
+  // your noise meter: loud actions spike it, silence drains it
+  myNoise = Math.max(0, myNoise - 1);
+  if (pa.type === 'dash') myNoise = Math.min(3, myNoise + 2);
+  if (pa.type === 'ping' || pa.type === 'torpedo') myNoise = 3;
+  if (r.pressure > 0 && (r.turn % 2 === 0) === (MY === 'player')) myNoise = Math.min(3, myNoise + 1);
   if (pa.type === 'dash') sfx.whoosh();
   if (pa.type === 'ping') {
     sfx.ping();
@@ -211,6 +225,12 @@ function playReport(r: TurnReport) {
     let murmured = false;
     for (const c of r.contacts) {
       if (c.perceiver !== MY) continue;
+      // vent murmurs are ambient: a faint flicker, never a contact marker.
+      // anything amber that STAYS on the board is a real clue.
+      if (c.bloom.kind === 'murmur' && c.nearVent) {
+        scope.fx.push({ kind: 'ripple', pos: { ...c.bloom.pos }, start: performance.now(), dur: 600, big: false });
+        continue;
+      }
       scope.view.contacts.push({ ...c.bloom });
       scope.fx.push({ kind: 'ripple', pos: { ...c.bloom.pos }, start: performance.now(), dur: 900, big: c.bloom.intensity >= 2 });
       if (c.bloom.kind === 'murmur') {
@@ -218,10 +238,8 @@ function playReport(r: TurnReport) {
           sfx.murmur();
           murmured = true;
         }
-        if (!c.nearVent) {
-          const lines = c.bloom.intensity >= 2 ? STRONG_MURMUR_LINES : MURMUR_LINES;
-          hud.log(fmt(pick(lines), coordLabel(c.bloom.pos)), 'contact');
-        }
+        const lines = c.bloom.intensity >= 2 ? STRONG_MURMUR_LINES : MURMUR_LINES;
+        hud.log(fmt(pick(lines), coordLabel(c.bloom.pos)), 'contact');
       } else if (c.bloom.kind === 'cavitation') {
         sfx.murmur();
         hud.log(`Cavitación en ${coordLabel(c.bloom.pos)} — algo corrió.`, 'contact');
@@ -294,6 +312,8 @@ function playReport(r: TurnReport) {
     for (const b of r.bearings) {
       if (b.perceiver !== MY) continue;
       scope.view.bearing = { octant: b.octant, close: b.close, turn: r.turn };
+      scope.fx.push({ kind: 'listen', pos: { ...s.subs[MY].pos }, start: performance.now(), dur: 1100 });
+      label(`RUMBO ${OCTANTS[b.octant]}${b.close ? ' · CERCA' : ''}`, s.subs[MY].pos, GREEN);
       hud.log(`Rumbo ${OCTANTS[b.octant]}${b.close ? ' — CERCA' : ''}.`, 'good');
     }
   });
@@ -321,14 +341,20 @@ function playReport(r: TurnReport) {
     scope.view.contacts = scope.view.contacts.filter(c => s.turn - c.turn <= 4);
     refreshHud();
     if (s.result) {
+      hud.setTurnState('none');
       if (!matchRecorded) {
         matchRecorded = true;
         const outcome = s.result.winner === mySide ? 'win' : s.result.winner === 'draw' ? 'draw' : 'loss';
         recordMatch(outcome, s.subs[mySide].shots, s.subs[mySide].hits, mode === 'online');
+        if (mode === 'online') {
+          if (outcome === 'win') roomScore.me++;
+          else if (outcome === 'loss') roomScore.them++;
+        }
       }
       T(900, showEnd);
     } else {
       busy = false;
+      hud.setTurnState('yours');
       if (coachStep >= 0 && coachStep < COACH.length) {
         hud.hint('› ' + COACH[coachStep++]);
         if (coachStep >= COACH.length) {
@@ -357,6 +383,7 @@ function startMatch(seed: number, side: Side, online: boolean) {
   scope.view = emptyView();
   scope.fx = [];
   enemyKnown = HULL_MAX;
+  myNoise = 0;
   matchRecorded = false;
   hud.clearLog();
   hud.hideOverlay();
@@ -372,7 +399,8 @@ function startMatch(seed: number, side: Side, online: boolean) {
     kind: 'move',
   };
   busy = false;
-  hud.hint('› Elegí tu casilla inicial — clic en tu zona iluminada.');
+  hud.setTurnState('deploy');
+  hud.hint('› Clic en tu zona iluminada.');
 }
 
 function handleSpawn(cell: Vec) {
@@ -382,7 +410,8 @@ function handleSpawn(cell: Vec) {
   if (mode === 'online') {
     net?.sendSpawn(mySpawn);
     scope.targets = null;
-    hud.hint('— esperando al otro cazador —');
+    hud.setTurnState('waiting');
+    hud.hint('');
     tryStartPlay();
   } else {
     state.subs[mySide].pos = { ...mySpawn };
@@ -406,6 +435,7 @@ function beginPlay() {
   refreshHud();
   let coached = true;
   try { coached = !!localStorage.getItem('deadping.coached'); } catch { /* ok */ }
+  hud.setTurnState('yours');
   if (!coached && mode === 'ai') {
     coachStep = 0;
     hud.hint('› ' + COACH[coachStep++]);
@@ -423,6 +453,8 @@ function newSeed(): number {
 
 function hostGame() {
   leaveNet();
+  roomScore = { me: 0, them: 0 };
+  theirNick = 'RIVAL';
   const code = genCode();
   net = createSession(code, true);
   wireNet(net);
@@ -448,6 +480,7 @@ function hostGame() {
   });
   net.onJoin(() => {
     if (!net || (state && mode === 'online' && !state.result)) return;
+    net.sendHello(myNick);
     const seed = newSeed();
     net.sendInit(seed);
     startMatch(seed, 'player', true);
@@ -457,6 +490,8 @@ function hostGame() {
 function joinGame(code: string) {
   if (code.length !== 4) return;
   leaveNet();
+  roomScore = { me: 0, them: 0 };
+  theirNick = 'RIVAL';
   net = createSession(code, false);
   wireNet(net);
   net.onInit(seed => {
@@ -464,6 +499,7 @@ function joinGame(code: string) {
       window.clearTimeout(joinTimeout);
       joinTimeout = 0;
     }
+    net?.sendHello(myNick);
     startMatch(seed, 'enemy', true);
   });
   hud.showOverlay(`
@@ -497,6 +533,10 @@ function wireNet(session: NetSession) {
     theirSpawn = { x: v.x, y: v.y };
     tryStartPlay();
   });
+  session.onHello(name => {
+    theirNick = name.toUpperCase();
+    hud.setMode(modeBase());
+  });
   session.onLeave(() => {
     if (mode === 'online' && state && !state.result) {
       netError('Se cortó la señal. El otro cazador desapareció en la oscuridad.');
@@ -524,6 +564,7 @@ function showTitle() {
   state = null;
   scope.state = null;
   hud.setMode('');
+  hud.setTurnState('none');
   hud.showOverlay(`
     <div class="screen">
       <h1 class="title">DEAD PING</h1>
@@ -536,6 +577,7 @@ function showTitle() {
       </div>
       <button id="diveBtn" class="big">▶ JUGAR VS IA</button>
       <div class="netRow">
+        <input id="nickInput" maxlength="12" placeholder="TU APODO" autocomplete="off" spellcheck="false" value="${myNick === 'CAZADOR' ? '' : myNick}"/>
         <button id="hostBtn" class="mid">CREAR DUELO ONLINE</button>
         <input id="codeInput" maxlength="4" placeholder="CÓDIGO" autocomplete="off" spellcheck="false"/>
         <button id="joinBtn" class="mid">UNIRSE</button>
@@ -543,6 +585,11 @@ function showTitle() {
       <p class="lore dim" id="lbLine">${logbookLine(loadLogbook())}</p>
     </div>
   `);
+  const nick = document.getElementById('nickInput') as HTMLInputElement;
+  nick.addEventListener('input', () => {
+    myNick = nick.value.trim().toUpperCase() || 'CAZADOR';
+    try { localStorage.setItem('deadping.nick', myNick); } catch { /* ok */ }
+  });
   document.getElementById('diveBtn')!.addEventListener('click', () => {
     sfx.ensure();
     sfx.drone();
@@ -602,6 +649,7 @@ function showEnd() {
         <div><b>${p.decoysLeft}</b><span>SEÑUELOS</span></div>
       </div>
       <div class="rank">CALIFICACIÓN: ${rank}</div>
+      ${mode === 'online' ? `<div class="roomScore">${myNick} ${roomScore.me} — ${roomScore.them} ${theirNick}</div>` : ''}
       <p class="lore dim">${logbookLine(loadLogbook())}</p>
       ${rematchUi}
       <div><button id="portBtn" class="mid">VOLVER AL PUERTO</button></div>

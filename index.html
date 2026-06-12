@@ -21,17 +21,20 @@
       <section class="bars">
         <div class="bar"><label class="lblMe">▲ VOS</label><div id="hullPlayer" class="pips"></div></div>
         <div class="bar"><label class="lblFoe">▲ ENEMIGO</label><div id="hullEnemy" class="pips enemy"></div></div>
+        <div class="bar" title="Cuánto te oyeron últimamente. Baja sola turno a turno: el silencio te borra del mapa.">
+          <label class="lblNoise">◍ RUIDO</label><div id="noiseBar" class="pips noise"></div>
+        </div>
       </section>
       <section class="status">
         <span id="turnLabel">T-01</span>
         <span id="modeLabel"></span>
-        <span id="tubeLabel" class="ok">TUBO LISTO</span>
-        <span id="decoyLabel">SEÑUELOS ◆◆</span>
         <span id="pressureLabel"></span>
       </section>
+      <div id="turnState" class="ts-none"></div>
       <section id="actions"></section>
       <div id="hint"></div>
       <div id="log"></div>
+      <div id="legend"><span class="l">●</span> ruido oído &nbsp; <span class="q">▲</span> vos &nbsp; <span class="r">◆</span> visto/peligro &nbsp; <span class="l">◍</span> vent (ruido propio)</div>
     </aside>
   </div>
   <div id="overlay" class="hidden"></div>

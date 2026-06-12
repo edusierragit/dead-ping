@@ -114,6 +114,37 @@ canvas#scope {
 
 .pips.enemy span { border-color: #7a2d22; }
 
+.lblNoise { color: var(--amber) !important; }
+.pips.noise span { border-color: #6e4a1e; }
+.pips.noise span.full {
+  background: var(--amber);
+  box-shadow: 0 0 8px rgba(255, 180, 84, 0.7);
+}
+
+.roomScore {
+  font-size: 20px;
+  letter-spacing: 3px;
+  color: var(--cream);
+  margin: 10px 0 2px;
+  text-shadow: 0 0 14px rgba(255, 233, 201, 0.4);
+}
+
+#nickInput {
+  width: 140px;
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-align: center;
+  text-transform: uppercase;
+  background: #020c16;
+  color: var(--ph);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  outline: none;
+}
+
+#nickInput:focus { border-color: var(--ph-dim); }
+
 .pips.enemy span.full {
   background: var(--red);
   box-shadow: 0 0 8px rgba(255, 87, 71, 0.7);
@@ -189,6 +220,17 @@ button.action .d { font-size: 9px; color: var(--ph-dim); }
 .nz { font-size: 9px; letter-spacing: 1px; }
 .nz.quiet { color: var(--ph-dim); }
 .nz.loud { color: var(--amber); }
+.nz.cd { color: var(--red); font-weight: bold; }
+.charges { color: var(--amber); letter-spacing: 2px; }
+
+#legend {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--ph-dim);
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  margin-top: auto;
+}
 .lblMe { color: var(--ph) !important; }
 .lblFoe { color: var(--red) !important; }
 .howto i, .lore i { font-style: normal; }
@@ -201,6 +243,33 @@ button.action .d { font-size: 9px; color: var(--ph-dim); }
   font-size: 11px;
   color: var(--amber);
 }
+
+#turnState {
+  font-size: 13px;
+  letter-spacing: 2px;
+  text-align: center;
+  padding: 9px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.ts-yours {
+  color: var(--ph);
+  border-color: var(--ph-dim) !important;
+  animation: tsPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes tsPulse {
+  50% { box-shadow: 0 0 16px rgba(84, 232, 255, 0.4); }
+}
+
+.ts-wait {
+  color: var(--amber);
+  animation: blink 1.4s infinite;
+}
+
+.ts-res { color: var(--ph-dim); }
+.ts-none { display: none; }
 
 #log {
   font-size: 13px;

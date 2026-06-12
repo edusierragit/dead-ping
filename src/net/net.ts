@@ -19,9 +19,11 @@ export interface NetSession {
   sendInit(seed: number): void;
   sendAction(turn: number, action: Action): void;
   sendSpawn(v: Vec): void;
+  sendHello(name: string): void;
   onInit(cb: (seed: number) => void): void;
   onAction(cb: (turn: number, action: Action) => void): void;
   onSpawn(cb: (v: Vec) => void): void;
+  onHello(cb: (name: string) => void): void;
   onJoin(cb: () => void): void;
   onLeave(cb: () => void): void;
   leave(): void;
@@ -32,6 +34,7 @@ export function createSession(code: string, isHost: boolean): NetSession {
   const init = room.makeAction<number>('init');
   const act = room.makeAction('act');
   const spawn = room.makeAction('spawn');
+  const hello = room.makeAction<string>('hello');
   return {
     code,
     isHost,
@@ -39,6 +42,7 @@ export function createSession(code: string, isHost: boolean): NetSession {
     sendAction: (turn, action) =>
       void act.send({ t: turn, a: action } as unknown as JsonValue),
     sendSpawn: v => void spawn.send({ x: v.x, y: v.y } as unknown as JsonValue),
+    sendHello: name => void hello.send(name),
     onInit: cb => {
       init.onMessage = data => cb(data);
     },
@@ -52,6 +56,11 @@ export function createSession(code: string, isHost: boolean): NetSession {
       spawn.onMessage = data => {
         const v = data as unknown as Vec;
         if (v && typeof v.x === 'number' && typeof v.y === 'number') cb(v);
+      };
+    },
+    onHello: cb => {
+      hello.onMessage = data => {
+        if (typeof data === 'string' && data.length > 0) cb(data.slice(0, 14));
       };
     },
     onJoin: cb => {

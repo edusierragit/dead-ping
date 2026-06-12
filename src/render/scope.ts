@@ -1,4 +1,4 @@
-import { Bloom, GRID, HULL_MAX, MatchState, Side, Vec, neighbors, other } from '../game/types';
+import { Bloom, GRID, HULL_MAX, MatchState, OCTANTS, Side, Vec, neighbors, other } from '../game/types';
 
 export interface View {
   contacts: Bloom[];
@@ -8,7 +8,7 @@ export interface View {
   facing: number;
 }
 
-export type FxKind = 'ripple' | 'ping' | 'explosion' | 'reveal' | 'trail' | 'label';
+export type FxKind = 'ripple' | 'ping' | 'explosion' | 'reveal' | 'trail' | 'label' | 'listen';
 export interface Fx {
   kind: FxKind;
   pos: Vec;
@@ -169,8 +169,11 @@ export class Scope {
       ctx.fillRect(x, y, sz, sz);
     }
 
+    this.drawJellies(now);
+
     const s = this.state;
     if (!s) {
+      this.drawAttract(now);
       ctx.restore();
       return;
     }
@@ -323,7 +326,7 @@ export class Scope {
     // --- sound contacts: amber distortion blooming on the floor ---
     for (const c of this.view.contacts) {
       const age = s.turn - c.turn;
-      const alpha = Math.max(0, 1 - age / 4);
+      const alpha = Math.max(0, 1 - age / 3);
       if (alpha <= 0) continue;
       const p = this.center(c.pos);
       const col = c.kind === 'scream' ? '255,87,71' : '255,180,84';
@@ -394,6 +397,15 @@ export class Scope {
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.restore();
+        // octant tag at the cone's tip
+        ctx.fillStyle = `rgba(140,255,220,${alpha * 0.85})`;
+        ctx.font = 'bold 14px ui-monospace, Consolas, monospace';
+        ctx.fillText(
+          OCTANTS[this.view.bearing.octant],
+          pp.x + Math.cos(a) * reach * 1.08,
+          pp.y + Math.sin(a) * reach * SQ * 1.08,
+        );
+        ctx.font = '10px ui-monospace, Consolas, monospace';
       }
     }
 
@@ -427,7 +439,8 @@ export class Scope {
 
     // --- your boat ---
     const bob = Math.sin(now / 600) * 1.5;
-    this.drawSub(pp.x, pp.y + bob, pp.s, this.view.facing, {
+    const dirX = Math.cos(this.view.facing) >= 0 ? 1 : -1;
+    this.drawSub(pp.x, pp.y + bob, pp.s, dirX, now, {
       dark: '#0b4a63', body: '#54e8ff', sail: '#d8f8ff', glow: '84,232,255',
     });
 
@@ -448,7 +461,7 @@ export class Scope {
     // --- enemy revealed only when the match ends ---
     if (s.result) {
       const ep = this.center(s.subs[other(this.mySide)].pos);
-      this.drawSub(ep.x, ep.y, ep.s, Math.PI / 2, {
+      this.drawSub(ep.x, ep.y, ep.s, -1, now, {
         dark: '#6b2218', body: '#ff8a78', sail: '#ffd6cc', glow: '255,87,71',
       });
     }
@@ -490,6 +503,16 @@ export class Scope {
           ctx.fillStyle = `rgba(255,210,140,${(1 - t) * 0.85})`;
           ctx.fillRect(p.x + Math.cos(a) * d - 1, p.y + Math.sin(a) * d * SQ - 1 - t * 14, 2, 2);
         }
+      } else if (f.kind === 'listen') {
+        // sound converging INTO you: rings collapse toward your hull
+        for (const off of [0, 0.25, 0.5]) {
+          const tt = (t - off) / 0.5;
+          if (tt <= 0 || tt >= 1) continue;
+          ctx.strokeStyle = `rgba(140,255,220,${tt * 0.5})`;
+          ctx.lineWidth = 1.5;
+          this.floorEllipse(p.x, p.y, (1 - tt) * CS * 3, true);
+        }
+        ctx.lineWidth = 1;
       } else if (f.kind === 'reveal') {
         const r = CS * p.s * (1.6 - t * 1.2);
         ctx.strokeStyle = `rgba(255,87,71,${0.4 + t * 0.5})`;
@@ -533,61 +556,135 @@ export class Scope {
     ctx.restore();
   }
 
-  // top-down submarine: chubby cigar hull, deck line, sail, stern planes, prop
-  private drawSub(x: number, y: number, scale: number, facing: number, c: { dark: string; body: string; sail: string; glow: string }) {
+  // side-profile submarine billboard: hull, sail, periscope, tail fin,
+  // spinning propeller and glowing portholes. Reads as a sub at a glance.
+  private drawSub(x: number, y: number, scale: number, dirX: number, now: number, c: { dark: string; body: string; sail: string; glow: string }) {
     const ctx = this.ctx;
-    const L = CS * 0.38 * scale;
-    const W = CS * 0.17 * scale;
+    const L = CS * 0.64 * scale;
+    const H = CS * 0.20 * scale;
     ctx.save();
     ctx.translate(x, y);
-    // projected shadow on the seafloor
+    // floor shadow
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.beginPath();
-    ctx.ellipse(5, 8, W * 1.15, L * 0.9 * SQ, facing + Math.PI / 2, 0, Math.PI * 2);
+    ctx.ellipse(0, H * 1.7, L * 0.52, H * 0.45, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.rotate(facing + Math.PI / 2);
+    ctx.scale(dirX, 1); // nose points along travel direction
     ctx.shadowColor = `rgba(${c.glow},0.8)`;
-    ctx.shadowBlur = 14;
-    const g = ctx.createLinearGradient(-W, 0, W, 0);
-    g.addColorStop(0, c.dark);
-    g.addColorStop(0.45, c.body);
+    ctx.shadowBlur = 16;
+    const g = ctx.createLinearGradient(0, -H, 0, H);
+    g.addColorStop(0, c.body);
+    g.addColorStop(0.55, c.body);
     g.addColorStop(1, c.dark);
     ctx.fillStyle = g;
+    // hull: rounded nose right, tapered tail left
     ctx.beginPath();
-    ctx.moveTo(-W, 0);
-    ctx.bezierCurveTo(-W, -L * 0.72, -W * 0.55, -L, 0, -L);
-    ctx.bezierCurveTo(W * 0.55, -L, W, -L * 0.72, W, 0);
-    ctx.bezierCurveTo(W, L * 0.78, W * 0.5, L * 0.95, 0, L * 0.95);
-    ctx.bezierCurveTo(-W * 0.5, L * 0.95, -W, L * 0.78, -W, 0);
+    ctx.moveTo(-L * 0.5, 0);
+    ctx.quadraticCurveTo(-L * 0.25, -H * 0.78, L * 0.1, -H * 0.8);
+    ctx.quadraticCurveTo(L * 0.44, -H * 0.8, L * 0.5, 0);
+    ctx.quadraticCurveTo(L * 0.44, H * 0.8, L * 0.1, H * 0.8);
+    ctx.quadraticCurveTo(-L * 0.25, H * 0.78, -L * 0.5, 0);
+    ctx.closePath();
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-    ctx.lineWidth = 1.5;
+    // sail
+    ctx.fillStyle = c.sail;
     ctx.beginPath();
-    ctx.moveTo(0, -L * 0.82);
-    ctx.lineTo(0, L * 0.8);
-    ctx.stroke();
-    ctx.strokeStyle = c.body;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(-W * 1.55, L * 0.72);
-    ctx.lineTo(W * 1.55, L * 0.72);
-    ctx.stroke();
+    if (ctx.roundRect) ctx.roundRect(L * 0.02, -H * 1.6, L * 0.18, H * 0.9, 3);
+    else ctx.rect(L * 0.02, -H * 1.6, L * 0.18, H * 0.9);
+    ctx.fill();
+    // periscope
     ctx.strokeStyle = c.sail;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(0, L * 1.05, W * 0.32, 0, Math.PI * 2);
+    ctx.moveTo(L * 0.08, -H * 1.6);
+    ctx.lineTo(L * 0.08, -H * 2.2);
+    ctx.lineTo(L * 0.15, -H * 2.2);
     ctx.stroke();
-    ctx.fillStyle = c.sail;
+    // tail fin
+    ctx.fillStyle = c.body;
     ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(-W * 0.34, -L * 0.5, W * 0.68, L * 0.52, W * 0.3);
-    else ctx.rect(-W * 0.34, -L * 0.5, W * 0.68, L * 0.52);
+    ctx.moveTo(-L * 0.36, -H * 0.3);
+    ctx.lineTo(-L * 0.52, -H * 1.15);
+    ctx.lineTo(-L * 0.44, 0);
+    ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = c.dark;
+    // spinning propeller
+    const spin = Math.abs(Math.sin(now / 130));
+    ctx.strokeStyle = c.sail;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(0, -L * 0.36, W * 0.12, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.ellipse(-L * 0.54, 0, H * 0.16, H * 0.6 * spin + 1, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    // glowing portholes
+    ctx.fillStyle = 'rgba(255,240,200,0.95)';
+    ctx.shadowColor = 'rgba(255,240,200,0.95)';
+    ctx.shadowBlur = 6;
+    for (let k = 0; k < 3; k++) {
+      ctx.beginPath();
+      ctx.arc(L * (0.28 - k * 0.16), -H * 0.08, Math.max(1.4, 1.7 * scale), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
     ctx.restore();
     ctx.lineWidth = 1;
+  }
+
+  // bioluminescent jellyfish drifting in the background
+  private drawJellies(now: number) {
+    const ctx = this.ctx;
+    for (let i = 0; i < 3; i++) {
+      const sp = 26000 + i * 9000;
+      const cyc = now / sp + i * 0.37;
+      const t = cyc % 1;
+      const x = SIZE * (0.1 + 0.8 * hash(i * 11 + Math.floor(cyc))) + Math.sin(now / 2300 + i) * 28;
+      const y = SIZE * (1.08 - t * 1.25);
+      const size = 15 + hash(i * 7) * 16;
+      const pulse = Math.sin(now / 700 + i * 2);
+      const alpha = 0.15 * Math.sin(Math.PI * t);
+      if (alpha <= 0.01) continue;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.shadowColor = 'rgba(150,170,255,0.8)';
+      ctx.shadowBlur = 16;
+      ctx.fillStyle = `rgba(150,170,255,${alpha})`;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * (1 + pulse * 0.08), size * 0.75 * (1 - pulse * 0.1), 0, Math.PI, Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = `rgba(150,170,255,${alpha * 0.7})`;
+      ctx.lineWidth = 1.2;
+      for (let k = -2; k <= 2; k++) {
+        ctx.beginPath();
+        ctx.moveTo(k * size * 0.28, 1);
+        ctx.quadraticCurveTo(
+          k * size * 0.3 + Math.sin(now / 500 + k + i) * 6,
+          size * 0.9,
+          k * size * 0.34 + Math.sin(now / 350 + k * 2 + i) * 9,
+          size * 1.7,
+        );
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.lineWidth = 1;
+    }
+  }
+
+  // attract mode behind the title: a lone hunter cruising and pinging the dark
+  private drawAttract(now: number) {
+    const ctx = this.ctx;
+    const t = (now / 26000) * Math.PI * 2;
+    const x = CX + Math.cos(t) * SIZE * 0.26;
+    const y = SIZE * 0.6 + Math.sin(t * 2) * 42;
+    const dirX = -Math.sin(t) >= 0 ? 1 : -1;
+    const pt = (now % 5200) / 5200;
+    ctx.strokeStyle = `rgba(84,232,255,${(1 - pt) * 0.22})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.ellipse(x, y, pt * 330, pt * 230, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    this.drawSub(x, y, 1.3, dirX, now, { dark: '#0b4a63', body: '#54e8ff', sail: '#d8f8ff', glow: '84,232,255' });
   }
 }

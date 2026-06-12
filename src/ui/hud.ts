@@ -14,6 +14,16 @@ function noiseDots(n: number): string {
   return `<span class="nz loud">ruido ${'●'.repeat(n)}${'○'.repeat(3 - n)}</span>`;
 }
 
+// one-line explanations on hover: the curious learn without a manual
+const TIPS: Record<ActionType, string> = {
+  drift: 'Te movés 1 casilla. Nadie te oye.',
+  dash: '2-3 casillas en línea. El enemigo oye tu casilla de SALIDA.',
+  listen: 'Te quedás quieto y oís la dirección del enemigo (cono en el mapa).',
+  ping: 'Ves su casilla exacta… pero él oye la tuya exacta. Verdad por verdad.',
+  torpedo: 'Explota una casilla a ≤4: 2 de daño directo, 1 al lado. Recarga 3 turnos.',
+  decoy: 'Dejás un emisor de ruido falso y te movés 1. Solo tenés 2 por partida.',
+};
+
 const $ = (id: string) => document.getElementById(id)!;
 let onAction: (t: ActionType) => void = () => {};
 
@@ -25,6 +35,7 @@ export function init(cb: { onAction: (t: ActionType) => void }) {
     b.className = 'action';
     b.id = `act-${a.type}`;
     b.innerHTML = `<span class="k">[${a.key}] ${noiseDots(a.noise)}</span><span class="n"><i>${a.icon}</i> ${a.name}</span><span class="d">${a.desc}</span>`;
+    b.title = TIPS[a.type];
     b.addEventListener('click', () => onAction(a.type));
     box.appendChild(b);
   }
@@ -36,29 +47,37 @@ export function setSelected(t: ActionType | null) {
   }
 }
 
-function pips(el: HTMLElement, val: number) {
+function pips(el: HTMLElement, val: number, max = HULL_MAX) {
   el.innerHTML = '';
-  for (let i = 0; i < HULL_MAX; i++) {
+  for (let i = 0; i < max; i++) {
     const s = document.createElement('span');
     if (i < val) s.className = 'full';
     el.appendChild(s);
   }
 }
 
-export function refresh(state: MatchState, mySide: Side, enemyKnown: number, avail: Record<ActionType, boolean>) {
+export function refresh(state: MatchState, mySide: Side, enemyKnown: number, myNoise: number, avail: Record<ActionType, boolean>) {
   pips($('hullPlayer'), state.subs[mySide].hull);
   pips($('hullEnemy'), enemyKnown);
+  pips($('noiseBar'), myNoise, 3);
   $('turnLabel').textContent = `T-${String(state.turn + 1).padStart(2, '0')}`;
   const next = state.turn + 1;
   const pl = $('pressureLabel');
   pl.textContent = next >= PRESSURE_HARD ? 'PRESIÓN: CRÍTICA' : next >= PRESSURE_SOFT ? 'PRESIÓN: SUBIENDO' : '';
   pl.className = next >= PRESSURE_HARD ? 'crit' : next >= PRESSURE_SOFT ? 'warn' : '';
+  // resources live ON the action buttons, where the decision happens
   const cd = state.subs[mySide].cooldown;
-  const tube = $('tubeLabel');
-  tube.textContent = cd > 0 ? `RECARGA [${cd}]` : 'TUBO LISTO';
-  tube.className = cd > 0 ? 'warn' : 'ok';
+  const torNz = $('act-torpedo').querySelector('.nz') as HTMLElement;
+  if (cd > 0) {
+    torNz.textContent = `▮ RECARGA ${cd}`;
+    torNz.className = 'nz cd';
+  } else {
+    torNz.innerHTML = 'ruido ●●●';
+    torNz.className = 'nz loud';
+  }
   const dc = state.subs[mySide].decoysLeft;
-  $('decoyLabel').textContent = 'SEÑUELOS ' + '◆'.repeat(dc) + '◇'.repeat(2 - dc);
+  const decN = $('act-decoy').querySelector('.n') as HTMLElement;
+  decN.innerHTML = `<i>◌</i> SEÑUELO <span class="charges">${'◆'.repeat(dc)}${'◇'.repeat(2 - dc)}</span>`;
   for (const a of ACTIONS) {
     ($(`act-${a.type}`) as HTMLButtonElement).disabled = !avail[a.type];
   }
@@ -70,6 +89,21 @@ export function hint(text: string) {
 
 export function setMode(text: string) {
   $('modeLabel').textContent = text;
+}
+
+export type TurnState = 'yours' | 'waiting' | 'resolving' | 'deploy' | 'none';
+
+export function setTurnState(kind: TurnState) {
+  const el = $('turnState');
+  const map: Record<TurnState, [string, string]> = {
+    yours: ['▶ TU TURNO — ELEGÍ ACCIÓN', 'ts-yours'],
+    waiting: ['⌛ ESPERANDO AL RIVAL…', 'ts-wait'],
+    resolving: ['··· RESOLVIENDO ···', 'ts-res'],
+    deploy: ['⚓ ELEGÍ TU POSICIÓN INICIAL', 'ts-yours'],
+    none: ['', 'ts-none'],
+  };
+  el.textContent = map[kind][0];
+  el.className = map[kind][1];
 }
 
 // at most two recent events on screen: the board tells the story, not a log
