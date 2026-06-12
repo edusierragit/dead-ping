@@ -4,7 +4,7 @@ import { AiBrain } from './game/ai';
 import { createMatch, dashTargets, driftTargets, resolveTurn, torpedoTargets } from './game/rules';
 import {
   Action, ActionType, HULL_MAX, MatchState, OCTANTS, PRESSURE_HARD, PRESSURE_SOFT, Rng, Side,
-  TurnReport, Vec, coordLabel, eq, mulberry32, other,
+  TurnReport, Vec, coordLabel, eq, idx, mulberry32, other,
 } from './game/types';
 import { NetSession, createSession, genCode } from './net/net';
 import { Scope, emptyView } from './render/scope';
@@ -28,6 +28,9 @@ let net: NetSession | null = null;
 let localAction: Action | null = null;
 let remoteAction: { turn: number; action: Action } | null = null;
 let joinTimeout = 0;
+let phase: 'deploy' | 'play' = 'play';
+let mySpawn: Vec | null = null;
+let theirSpawn: Vec | null = null;
 
 const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
@@ -37,31 +40,14 @@ function loop(now: number) {
 }
 requestAnimationFrame(loop);
 
-// ---------------- narración ----------------
+// ---------------- microcopy ----------------
 
-const FLAVOR: Record<ActionType, string[]> = {
-  drift: ['Máquina a paso muerto. El casco apenas respira.', 'Nos deslizamos unos metros en la negrura.', 'Lastre ajustado. Ni un susurro.'],
-  dash: ['¡A toda máquina! La hélice grita atrás nuestro.', 'Corremos. Todo acá abajo nos escuchó.', 'Cavitación en la estela. Sucio, pero rápido.'],
-  listen: ['Todo detenido. Hidrófonos bien abiertos.', 'Contenemos la respiración y escuchamos.', 'Silencio. Solo la fosa, hablando sola.'],
-  ping: ['Ping activo. Ahora toda la fosa sabe quiénes somos.', 'Un pulso limpio. La verdad se paga con ruido.'],
-  torpedo: ['Tubo inundado. Pez en el agua.', 'Lanzamiento. El agua se desgarra.'],
-  decoy: ['Señuelo girando. Que persigan un fantasma.', 'Dejamos un mentiroso atrás y nos esfumamos.'],
-};
-
-const MURMUR_LINES = [
-  'Transitorio cerca de %s. Puede ser nada. Pueden ser dientes.',
-  'Algo susurró cerca de %s.',
-  'Contacto débil en %s. El agua le está mintiendo a alguien.',
-];
-
-const STRONG_MURMUR_LINES = [
-  'Transitorio fuerte cerca de %s — un casco gimiendo por la presión.',
-  'Sus planchas están cantando. Cerca de %s.',
-];
+const MURMUR_LINES = ['Ruido cerca de %s.', 'Algo se movió cerca de %s.'];
+const STRONG_MURMUR_LINES = ['Un casco cruje cerca de %s.'];
 
 const fmt = (s: string, v: string) => s.replace('%s', v);
 
-const GREEN = '110,255,176';
+const GREEN = '84,232,255';
 const RED = '255,87,71';
 const AMBER = '255,180,84';
 
@@ -69,13 +55,11 @@ function label(text: string, pos: Vec, color: string) {
   scope.fx.push({ kind: 'label', pos: { ...pos }, text, color, start: performance.now(), dur: 1600 });
 }
 
-// coach: first dives teach the loop, one line at a time, then never again
+// coach: first dive teaches the loop in three lines, then never again
 const COACH = [
-  'Estás a ciegas. ESCUCHÁ (3) para tener un rumbo del enemigo.',
-  'El cono verde es su rumbo. Acercate con DERIVA (1) — es silenciosa.',
-  'Las flores ámbar son sonidos ajenos: pueden ser él, los vents… o mentiras.',
-  '¿Seguro de dónde está? PING (4) lo revela exacto. TORPEDO (5) lo hunde.',
-  'Ojo: PING y TORPEDO gritan TU posición. Después de usarlos, movete.',
+  'Movete sin ruido (1). Él tampoco te ve.',
+  'ESCUCHAR (3) revela su dirección.',
+  'PING (4) lo revela exacto — y te expone.',
 ];
 let coachStep = -1; // -1 = off
 
@@ -88,7 +72,11 @@ function flashVignette() {
 }
 
 function defaultHint() {
-  return 'Elegí una acción — teclas 1-6, ESC cancela.';
+  return 'UNA acción por turno — teclas 1-6, ESC cancela.';
+}
+
+function modeBase() {
+  return mode === 'online' ? `VS HUMANO · ${net?.code ?? ''}` : 'VS ABISMO';
 }
 
 function availability(s: MatchState): Record<ActionType, boolean> {
@@ -105,7 +93,11 @@ function availability(s: MatchState): Record<ActionType, boolean> {
 }
 
 function refreshHud() {
-  if (state) hud.refresh(state, mySide, enemyKnown, availability(state));
+  if (!state) return;
+  const avail = phase === 'play'
+    ? availability(state)
+    : { drift: false, dash: false, listen: false, ping: false, torpedo: false, decoy: false };
+  hud.refresh(state, mySide, enemyKnown, avail);
 }
 
 function cancelTargeting() {
@@ -129,7 +121,7 @@ function leaveNet() {
 // ---------------- flujo de turno ----------------
 
 function selectAction(t: ActionType) {
-  if (busy || !state) return;
+  if (busy || !state || phase !== 'play') return;
   if (pending === t) {
     cancelTargeting();
     return;
@@ -156,7 +148,7 @@ function selectAction(t: ActionType) {
 }
 
 function commit(action: Action) {
-  if (!state || busy) return;
+  if (!state || busy || phase !== 'play') return;
   busy = true;
   pending = null;
   scope.targets = null;
@@ -185,6 +177,7 @@ function resolveNet() {
     : { player: remoteAction.action, enemy: localAction };
   localAction = null;
   remoteAction = null;
+  hud.setMode(modeBase());
   hud.hint('— resolviendo —');
   const report = resolveTurn(state, actions, sharedRng);
   playReport(report);
@@ -203,7 +196,6 @@ function playReport(r: TurnReport) {
   }
 
   const pa = r.actions[MY];
-  hud.log(pick(FLAVOR[pa.type]), 'me');
   if (pa.type === 'dash') sfx.whoosh();
   if (pa.type === 'ping') {
     sfx.ping();
@@ -232,14 +224,14 @@ function playReport(r: TurnReport) {
         }
       } else if (c.bloom.kind === 'cavitation') {
         sfx.murmur();
-        hud.log(`Estallido de cavitación en ${coordLabel(c.bloom.pos)} — algo salió corriendo.`, 'contact');
+        hud.log(`Cavitación en ${coordLabel(c.bloom.pos)} — algo corrió.`, 'contact');
       } else if (r.actions[THEIR].type === 'ping') {
         sfx.alarm();
-        hud.log(`SONAR ACTIVO desde ${coordLabel(c.bloom.pos)} — TIENEN NUESTRA POSICIÓN.`, 'alert');
+        hud.log('SONAR ENEMIGO — saben dónde estamos.', 'alert');
         label('¡NOS VIERON!', s.subs[MY].pos, RED);
         flashVignette();
       } else if (r.actions[THEIR].type === 'torpedo') {
-        hud.log(`¡Transitorio de lanzamiento en ${coordLabel(c.bloom.pos)}!`, 'alert');
+        hud.log(`Lanzamiento desde ${coordLabel(c.bloom.pos)}.`, 'alert');
       }
     }
   });
@@ -265,13 +257,13 @@ function playReport(r: TurnReport) {
         sfx.explosion(big);
         if (ex.side === MY) {
           if (ex.oppDamage === 2) {
-            hud.log('IMPACTO DIRECTO. Su casco se partió.', 'good');
+            hud.log('Impacto directo.', 'good');
             label('¡IMPACTO DIRECTO!', ex.target, GREEN);
           } else if (ex.oppDamage === 1) {
-            hud.log('Daño de onda — lo rozamos.', 'good');
+            hud.log('Lo rozamos.', 'good');
             label('¡LO ROZAMOS!', ex.target, GREEN);
           } else {
-            hud.log(`Detonación en ${coordLabel(ex.target)}. Se lo tragó el abismo. Erramos.`, 'me');
+            hud.log(`Erramos en ${coordLabel(ex.target)}.`, 'me');
             label('ERRAMOS', ex.target, AMBER);
           }
           enemyKnown = Math.max(0, enemyKnown - ex.oppDamage);
@@ -279,11 +271,11 @@ function playReport(r: TurnReport) {
       }
       const pd = r.damage.filter(d => d.side === MY).reduce((acc, d) => acc + d.amount, 0);
       if (pd > 0) {
-        hud.log(`NOS DIERON — casco en ${s.subs[MY].hull}/${HULL_MAX}.`, 'alert');
+        hud.log(`NOS DIERON — casco ${s.subs[MY].hull}/${HULL_MAX}.`, 'alert');
         label('¡NOS DIERON!', s.subs[MY].pos, RED);
         flashVignette();
       } else if (r.explosions.some(e => e.side === THEIR)) {
-        hud.log('Le están tirando a las sombras.', 'contact');
+        hud.log('Le tira a las sombras.', 'contact');
       }
       refreshHud();
     });
@@ -296,13 +288,13 @@ function playReport(r: TurnReport) {
       scope.view.lastKnown = { pos: { ...rv.pos }, turn: r.turn };
       scope.fx.push({ kind: 'reveal', pos: { ...rv.pos }, start: performance.now(), dur: 900 });
       sfx.echoReturn();
-      hud.log(`Retorno sólido — CONTACTO EN ${coordLabel(rv.pos)}.`, 'good');
+      hud.log(`Contacto en ${coordLabel(rv.pos)}.`, 'good');
       label('¡CONTACTO!', rv.pos, RED);
     }
     for (const b of r.bearings) {
       if (b.perceiver !== MY) continue;
       scope.view.bearing = { octant: b.octant, close: b.close, turn: r.turn };
-      hud.log(`Hidrófono: contacto rumbo ${OCTANTS[b.octant]}${b.close ? ' — CERCA' : ''}.`, 'good');
+      hud.log(`Rumbo ${OCTANTS[b.octant]}${b.close ? ' — CERCA' : ''}.`, 'good');
     }
   });
 
@@ -311,16 +303,16 @@ function playReport(r: TurnReport) {
     if (r.tremor && !s.result) {
       sfx.tremor();
       flashVignette();
-      hud.log('TEMBLOR DE PROXIMIDAD — lo tenemos encima.', 'alert');
+      hud.log('Está encima nuestro.', 'alert');
       label('ESTÁ CERCA', s.subs[MY].pos, RED);
     }
     if (r.turn === PRESSURE_SOFT) {
       sfx.alarm();
-      hud.log('El abismo se despierta. Los cascos empiezan a filtrar sonido.', 'alert');
+      hud.log('La fosa despierta: los cascos filtran ruido.', 'alert');
     }
     if (r.turn === PRESSURE_HARD) {
       sfx.alarm();
-      hud.log('RESONANCIA DE PROFUNDIDAD — cada casco canta su posición exacta.', 'alert');
+      hud.log('Resonancia: las posiciones exactas se filtran.', 'alert');
     }
   });
 
@@ -368,19 +360,53 @@ function startMatch(seed: number, side: Side, online: boolean) {
   matchRecorded = false;
   hud.clearLog();
   hud.hideOverlay();
-  hud.setMode(online ? `VS HUMANO · ${net?.code ?? ''}` : 'VS ABISMO');
-  hud.log('Chequeo de inmersión completo. Reactor en susurro.', 'me');
-  if (online) {
-    hud.log('Hay otro humano en esta fosa. Peor todavía: te está buscando.', 'contact');
-  } else {
-    hud.log('En algún lugar de esta fosa, otro cazador escuchó nuestra zambullida.', 'contact');
-  }
-  hud.log('Encontralo. En silencio.', 'me');
+  hud.setMode(modeBase());
+  hud.log(online ? 'Otro humano anda en la fosa.' : 'Otro cazador anda en la fosa.', 'contact');
   refreshHud();
+  // fase de despliegue: elegís tu casilla inicial en secreto
+  phase = 'deploy';
+  mySpawn = null;
+  theirSpawn = null;
+  scope.targets = {
+    cells: state.zones[mySide].filter(v => !state!.map.rock[idx(v)]),
+    kind: 'move',
+  };
   busy = false;
+  hud.hint('› Elegí tu casilla inicial — clic en tu zona iluminada.');
+}
+
+function handleSpawn(cell: Vec) {
+  if (!state || phase !== 'deploy' || mySpawn) return;
+  mySpawn = { ...cell };
+  sfx.click();
+  if (mode === 'online') {
+    net?.sendSpawn(mySpawn);
+    scope.targets = null;
+    hud.hint('— esperando al otro cazador —');
+    tryStartPlay();
+  } else {
+    state.subs[mySide].pos = { ...mySpawn };
+    beginPlay();
+  }
+}
+
+function tryStartPlay() {
+  if (!state || phase !== 'deploy' || !mySpawn || !theirSpawn) return;
+  state.subs[mySide].pos = { ...mySpawn };
+  state.subs[other(mySide)].pos = { ...theirSpawn };
+  beginPlay();
+}
+
+function beginPlay() {
+  if (!state) return;
+  phase = 'play';
+  scope.targets = null;
+  const p = state.subs[mySide].pos;
+  scope.view.facing = Math.atan2(5 - p.y, 5 - p.x);
+  refreshHud();
   let coached = true;
   try { coached = !!localStorage.getItem('deadping.coached'); } catch { /* ok */ }
-  if (!coached && !online) {
+  if (!coached && mode === 'ai') {
     coachStep = 0;
     hud.hint('› ' + COACH[coachStep++]);
   } else {
@@ -400,15 +426,22 @@ function hostGame() {
   const code = genCode();
   net = createSession(code, true);
   wireNet(net);
+  const link = `${location.origin}${location.pathname}?sala=${code}`;
   hud.showOverlay(`
     <div class="screen">
       <p class="tag">DUELO ONLINE</p>
       <div class="roomCode" id="roomCode">${code}</div>
-      <p class="lore">Pasale este código al otro cazador.<br/>La inmersión arranca sola cuando se conecte.</p>
+      <p class="lore">Pasale el código — o directamente el link:</p>
+      <div class="shareLink">${link}</div>
+      <button id="copyBtn" class="mid">COPIAR LINK</button>
       <p class="lore dim pulse">— esperando en la oscuridad —</p>
       <button id="cancelBtn" class="mid">CANCELAR</button>
     </div>
   `);
+  document.getElementById('copyBtn')!.addEventListener('click', () => {
+    void navigator.clipboard?.writeText(link);
+    document.getElementById('copyBtn')!.textContent = 'COPIADO ✓';
+  });
   document.getElementById('cancelBtn')!.addEventListener('click', () => {
     leaveNet();
     showTitle();
@@ -458,6 +491,11 @@ function wireNet(session: NetSession) {
     if (!state || state.result) return;
     remoteAction = { turn, action };
     if (localAction && turn === state.turn + 1) resolveNet();
+    else if (phase === 'play') hud.setMode(modeBase() + ' · ¡YA MOVIÓ!');
+  });
+  session.onSpawn(v => {
+    theirSpawn = { x: v.x, y: v.y };
+    tryStartPlay();
   });
   session.onLeave(() => {
     if (mode === 'online' && state && !state.result) {
@@ -489,26 +527,20 @@ function showTitle() {
   hud.showOverlay(`
     <div class="screen">
       <h1 class="title">DEAD PING</h1>
-      <p class="tag">El silencio es blindaje. El sonido es una confesión.</p>
-      <p class="lore">En algún lugar de esta fosa hay otro cazador.<br/>
-      Ninguno de los dos puede ver. Los dos pueden oír.</p>
-      <div class="howto">
-        <div><b>→ DERIVA</b> 1 casilla · <i class="q">silencio</i></div>
-        <div><b>≫ ACELERÓN</b> 2-3 casillas · <i class="l">ruido</i></div>
-        <div><b>))) ESCUCHAR</b> quieto · oís su rumbo</div>
-        <div><b>◎ PING</b> lo ves exacto · <i class="l">te oyen</i></div>
-        <div><b>⊕ TORPEDO</b> volá una casilla a ≤4 · <i class="l">ruido</i></div>
-        <div><b>◌ SEÑUELO</b> ruido falso para engañar · ×2</div>
+      <p class="tag">El ruido te delata.</p>
+      <p class="lore">Dos submarinos. Una fosa negra. Un disparo correcto.</p>
+      <div class="pillars">
+        <div><span class="pic">→</span><b>MOVETE</b><i>en silencio</i></div>
+        <div><span class="pic">◉</span><b>ESCUCHÁ</b><i>cada ruido es una pista</i></div>
+        <div><span class="pic">⊕</span><b>HUNDILO</b><i>antes de que te oiga</i></div>
       </div>
-      <p class="lore dim">En el mapa: <i class="l">ámbar = sonido ajeno</i> · <i class="r">rojo = peligro</i> · <i class="q">verde = vos</i>.<br/>
-      Casco: 4. Del turno 12, el abismo los delata a los dos. Hundilo primero.</p>
-      <p class="lore dim" id="lbLine">${logbookLine(loadLogbook())}</p>
-      <button id="diveBtn" class="big">▶ SUMERGIRSE — VS ABISMO</button>
+      <button id="diveBtn" class="big">▶ JUGAR VS IA</button>
       <div class="netRow">
         <button id="hostBtn" class="mid">CREAR DUELO ONLINE</button>
         <input id="codeInput" maxlength="4" placeholder="CÓDIGO" autocomplete="off" spellcheck="false"/>
         <button id="joinBtn" class="mid">UNIRSE</button>
       </div>
+      <p class="lore dim" id="lbLine">${logbookLine(loadLogbook())}</p>
     </div>
   `);
   document.getElementById('diveBtn')!.addEventListener('click', () => {
@@ -593,8 +625,13 @@ function showEnd() {
 // ---------------- input ----------------
 
 canvas.addEventListener('click', e => {
-  if (!state || busy || !pending) return;
+  if (!state || busy) return;
   const cell = scope.cellAt(e.clientX, e.clientY);
+  if (phase === 'deploy') {
+    if (cell && scope.targets?.cells.some(v => eq(v, cell))) handleSpawn(cell);
+    return;
+  }
+  if (!pending) return;
   if (!cell || !scope.targets?.cells.some(v => eq(v, cell))) {
     cancelTargeting();
     return;
@@ -623,6 +660,13 @@ window.addEventListener('keydown', e => {
 hud.init({ onAction: selectAction });
 showTitle();
 
+// joining by shared link: ?sala=CODE
+const salaParam = new URLSearchParams(location.search).get('sala');
+if (salaParam && salaParam.length === 4) {
+  history.replaceState(null, '', location.pathname);
+  joinGame(salaParam.toUpperCase());
+}
+
 // test hooks (driven by scripts/e2e.ts through CDP)
 declare global {
   interface Window { __dp?: unknown }
@@ -631,7 +675,12 @@ window.__dp = {
   get busy() { return busy; },
   get state() { return state; },
   get mySide() { return mySide; },
+  get phase() { return phase; },
   get lastKnown() { return scope.view.lastKnown; },
+  spawnAt(cell?: Vec) {
+    const c = cell ?? scope.targets?.cells[0];
+    if (c) handleSpawn(c);
+  },
   act(t: ActionType, cell?: Vec): boolean {
     if (busy || !state) return false;
     if (t === 'listen' || t === 'ping') {

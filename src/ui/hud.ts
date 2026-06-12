@@ -1,9 +1,9 @@
 import { ActionType, HULL_MAX, MatchState, PRESSURE_HARD, PRESSURE_SOFT, Side } from '../game/types';
 
 export const ACTIONS: { type: ActionType; key: string; icon: string; name: string; desc: string; noise: number }[] = [
-  { type: 'drift', key: '1', icon: '→', name: 'DERIVA', desc: 'moverse 1 casilla', noise: 0 },
-  { type: 'dash', key: '2', icon: '≫', name: 'ACELERÓN', desc: 'moverse 2-3 en línea', noise: 2 },
-  { type: 'listen', key: '3', icon: ')))', name: 'ESCUCHAR', desc: 'quieto · oís su rumbo', noise: 0 },
+  { type: 'drift', key: '1', icon: '→', name: 'MOVER', desc: '1 casilla, sin ruido', noise: 0 },
+  { type: 'dash', key: '2', icon: '≫', name: 'ACELERAR', desc: '2-3 casillas en línea', noise: 2 },
+  { type: 'listen', key: '3', icon: ')))', name: 'ESCUCHAR', desc: 'quieto · oís su dirección', noise: 0 },
   { type: 'ping', key: '4', icon: '◎', name: 'PING', desc: 'lo ves exacto', noise: 3 },
   { type: 'torpedo', key: '5', icon: '⊕', name: 'TORPEDO', desc: 'volá una casilla a ≤4', noise: 3 },
   { type: 'decoy', key: '6', icon: '◌', name: 'SEÑUELO', desc: 'ruido falso · ×2', noise: 0 },
@@ -72,14 +72,14 @@ export function setMode(text: string) {
   $('modeLabel').textContent = text;
 }
 
+// at most two recent events on screen: the board tells the story, not a log
 export function log(text: string, cls = '') {
   const box = $('log');
   const div = document.createElement('div');
   div.textContent = text;
   if (cls) div.className = cls;
-  box.appendChild(div);
-  while (box.children.length > 80) box.removeChild(box.firstChild!);
-  box.scrollTop = box.scrollHeight;
+  box.prepend(div);
+  while (box.children.length > 2) box.removeChild(box.lastChild!);
 }
 
 export function clearLog() {

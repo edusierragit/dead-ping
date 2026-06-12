@@ -2,7 +2,7 @@
 // of our own. Lockstep determinism: host sends a seed, both clients run identical
 // rules with the same rng; each turn both exchange actions and resolve locally.
 import { joinRoom, type JsonValue } from 'trystero';
-import { Action } from '../game/types';
+import { Action, Vec } from '../game/types';
 
 const APP_ID = 'frikex-dead-ping-v1';
 const CODE_CHARS = 'ABCDEFGHJKMNPRSTUVWXYZ';
@@ -18,8 +18,10 @@ export interface NetSession {
   isHost: boolean;
   sendInit(seed: number): void;
   sendAction(turn: number, action: Action): void;
+  sendSpawn(v: Vec): void;
   onInit(cb: (seed: number) => void): void;
   onAction(cb: (turn: number, action: Action) => void): void;
+  onSpawn(cb: (v: Vec) => void): void;
   onJoin(cb: () => void): void;
   onLeave(cb: () => void): void;
   leave(): void;
@@ -29,12 +31,14 @@ export function createSession(code: string, isHost: boolean): NetSession {
   const room = joinRoom({ appId: APP_ID }, code);
   const init = room.makeAction<number>('init');
   const act = room.makeAction('act');
+  const spawn = room.makeAction('spawn');
   return {
     code,
     isHost,
     sendInit: seed => void init.send(seed),
     sendAction: (turn, action) =>
       void act.send({ t: turn, a: action } as unknown as JsonValue),
+    sendSpawn: v => void spawn.send({ x: v.x, y: v.y } as unknown as JsonValue),
     onInit: cb => {
       init.onMessage = data => cb(data);
     },
@@ -42,6 +46,12 @@ export function createSession(code: string, isHost: boolean): NetSession {
       act.onMessage = data => {
         const p = data as unknown as { t: number; a: Action };
         if (p && typeof p.t === 'number' && p.a) cb(p.t, p.a);
+      };
+    },
+    onSpawn: cb => {
+      spawn.onMessage = data => {
+        const v = data as unknown as Vec;
+        if (v && typeof v.x === 'number' && typeof v.y === 'number') cb(v);
       };
     },
     onJoin: cb => {

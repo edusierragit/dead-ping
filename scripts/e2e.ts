@@ -44,6 +44,7 @@ const PLAY_TURN = `(() => {
   const s = dp.state;
   if (!s) return 'no-state';
   if (s.result) return 'over';
+  if (dp.phase === 'deploy') { dp.spawnAt(); return 'spawn'; }
   if (dp.busy) return false;
   const me = s.subs[dp.mySide];
   const lk = dp.lastKnown;
@@ -120,6 +121,13 @@ async function testOnlineDuel(browser: Browser, errors: string[]) {
   await waitFor(host, 'window.__dp.state !== null', 90000, 'host: inicio del duelo');
   await waitFor(guest, 'window.__dp.state !== null', 90000, 'guest: inicio del duelo');
   console.log('  ambos clientes iniciaron el duelo');
+
+  // fase de despliegue: ambos eligen casilla inicial
+  await host.evaluate('window.__dp.spawnAt()');
+  await guest.evaluate('window.__dp.spawnAt()');
+  await waitFor(host, `window.__dp.phase === 'play'`, 20000, 'host: fin del despliegue');
+  await waitFor(guest, `window.__dp.phase === 'play'`, 20000, 'guest: fin del despliegue');
+  console.log('  despliegue sincronizado en ambos lados');
 
   for (let t = 1; t <= 3; t++) {
     await waitFor(host, '!window.__dp.busy', 20000, `host listo turno ${t}`);
