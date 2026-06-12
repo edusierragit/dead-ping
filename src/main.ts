@@ -387,6 +387,7 @@ function startMatch(seed: number, side: Side, online: boolean) {
   matchRecorded = false;
   hud.clearLog();
   hud.hideOverlay();
+  if (online) net?.sendHello(myNick); // re-announce every match so names never miss
   hud.setMode(modeBase());
   hud.log(online ? 'Otro humano anda en la fosa.' : 'Otro cazador anda en la fosa.', 'contact');
   refreshHud();
@@ -708,11 +709,42 @@ window.addEventListener('keydown', e => {
 hud.init({ onAction: selectAction });
 showTitle();
 
-// joining by shared link: ?sala=CODE
+// joining by shared link: ?sala=CODE → pick your nick first, then dive
+function joinPrompt(code: string) {
+  hud.showOverlay(`
+    <div class="screen">
+      <p class="tag">TE INVITARON A UN DUELO</p>
+      <div class="roomCode">${code}</div>
+      <p class="lore">¿Cómo te llamás, cazador?</p>
+      <div class="netRow">
+        <input id="nickInput" maxlength="12" placeholder="TU APODO" autocomplete="off" spellcheck="false" value="${myNick === 'CAZADOR' ? '' : myNick}"/>
+      </div>
+      <button id="goBtn" class="big">▶ ENTRAR A LA SALA</button>
+      <div><button id="cancelBtn" class="mid">CANCELAR</button></div>
+    </div>
+  `);
+  const nick = document.getElementById('nickInput') as HTMLInputElement;
+  nick.focus();
+  nick.addEventListener('input', () => {
+    myNick = nick.value.trim().toUpperCase() || 'CAZADOR';
+    try { localStorage.setItem('deadping.nick', myNick); } catch { /* ok */ }
+  });
+  const go = () => {
+    sfx.ensure();
+    sfx.drone();
+    joinGame(code);
+  };
+  document.getElementById('goBtn')!.addEventListener('click', go);
+  nick.addEventListener('keydown', e => {
+    if (e.key === 'Enter') go();
+  });
+  document.getElementById('cancelBtn')!.addEventListener('click', showTitle);
+}
+
 const salaParam = new URLSearchParams(location.search).get('sala');
 if (salaParam && salaParam.length === 4) {
   history.replaceState(null, '', location.pathname);
-  joinGame(salaParam.toUpperCase());
+  joinPrompt(salaParam.toUpperCase());
 }
 
 // test hooks (driven by scripts/e2e.ts through CDP)
