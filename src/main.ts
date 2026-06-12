@@ -61,6 +61,24 @@ const STRONG_MURMUR_LINES = [
 
 const fmt = (s: string, v: string) => s.replace('%s', v);
 
+const GREEN = '110,255,176';
+const RED = '255,87,71';
+const AMBER = '255,180,84';
+
+function label(text: string, pos: Vec, color: string) {
+  scope.fx.push({ kind: 'label', pos: { ...pos }, text, color, start: performance.now(), dur: 1600 });
+}
+
+// coach: first dives teach the loop, one line at a time, then never again
+const COACH = [
+  'Estás a ciegas. ESCUCHÁ (3) para tener un rumbo del enemigo.',
+  'El cono verde es su rumbo. Acercate con DERIVA (1) — es silenciosa.',
+  'Las flores ámbar son sonidos ajenos: pueden ser él, los vents… o mentiras.',
+  '¿Seguro de dónde está? PING (4) lo revela exacto. TORPEDO (5) lo hunde.',
+  'Ojo: PING y TORPEDO gritan TU posición. Después de usarlos, movete.',
+];
+let coachStep = -1; // -1 = off
+
 // ---------------- helpers ----------------
 
 function flashVignette() {
@@ -218,6 +236,7 @@ function playReport(r: TurnReport) {
       } else if (r.actions[THEIR].type === 'ping') {
         sfx.alarm();
         hud.log(`SONAR ACTIVO desde ${coordLabel(c.bloom.pos)} — TIENEN NUESTRA POSICIÓN.`, 'alert');
+        label('¡NOS VIERON!', s.subs[MY].pos, RED);
         flashVignette();
       } else if (r.actions[THEIR].type === 'torpedo') {
         hud.log(`¡Transitorio de lanzamiento en ${coordLabel(c.bloom.pos)}!`, 'alert');
@@ -245,15 +264,23 @@ function playReport(r: TurnReport) {
         scope.addShake(big ? 10 : 6, 500);
         sfx.explosion(big);
         if (ex.side === MY) {
-          if (ex.oppDamage === 2) hud.log('IMPACTO DIRECTO. Su casco se partió.', 'good');
-          else if (ex.oppDamage === 1) hud.log('Daño de onda — lo rozamos.', 'good');
-          else hud.log(`Detonación en ${coordLabel(ex.target)}. Se lo tragó el abismo. Erramos.`, 'me');
+          if (ex.oppDamage === 2) {
+            hud.log('IMPACTO DIRECTO. Su casco se partió.', 'good');
+            label('¡IMPACTO DIRECTO!', ex.target, GREEN);
+          } else if (ex.oppDamage === 1) {
+            hud.log('Daño de onda — lo rozamos.', 'good');
+            label('¡LO ROZAMOS!', ex.target, GREEN);
+          } else {
+            hud.log(`Detonación en ${coordLabel(ex.target)}. Se lo tragó el abismo. Erramos.`, 'me');
+            label('ERRAMOS', ex.target, AMBER);
+          }
           enemyKnown = Math.max(0, enemyKnown - ex.oppDamage);
         }
       }
       const pd = r.damage.filter(d => d.side === MY).reduce((acc, d) => acc + d.amount, 0);
       if (pd > 0) {
         hud.log(`NOS DIERON — casco en ${s.subs[MY].hull}/${HULL_MAX}.`, 'alert');
+        label('¡NOS DIERON!', s.subs[MY].pos, RED);
         flashVignette();
       } else if (r.explosions.some(e => e.side === THEIR)) {
         hud.log('Le están tirando a las sombras.', 'contact');
@@ -270,6 +297,7 @@ function playReport(r: TurnReport) {
       scope.fx.push({ kind: 'reveal', pos: { ...rv.pos }, start: performance.now(), dur: 900 });
       sfx.echoReturn();
       hud.log(`Retorno sólido — CONTACTO EN ${coordLabel(rv.pos)}.`, 'good');
+      label('¡CONTACTO!', rv.pos, RED);
     }
     for (const b of r.bearings) {
       if (b.perceiver !== MY) continue;
@@ -284,6 +312,7 @@ function playReport(r: TurnReport) {
       sfx.tremor();
       flashVignette();
       hud.log('TEMBLOR DE PROXIMIDAD — lo tenemos encima.', 'alert');
+      label('ESTÁ CERCA', s.subs[MY].pos, RED);
     }
     if (r.turn === PRESSURE_SOFT) {
       sfx.alarm();
@@ -296,7 +325,7 @@ function playReport(r: TurnReport) {
   });
 
   // cierre
-  T(1500, () => {
+  T(1300, () => {
     scope.view.contacts = scope.view.contacts.filter(c => s.turn - c.turn <= 4);
     refreshHud();
     if (s.result) {
@@ -308,7 +337,15 @@ function playReport(r: TurnReport) {
       T(900, showEnd);
     } else {
       busy = false;
-      hud.hint(defaultHint());
+      if (coachStep >= 0 && coachStep < COACH.length) {
+        hud.hint('› ' + COACH[coachStep++]);
+        if (coachStep >= COACH.length) {
+          try { localStorage.setItem('deadping.coached', '1'); } catch { /* ok */ }
+          coachStep = -1;
+        }
+      } else {
+        hud.hint(defaultHint());
+      }
     }
   });
 }
@@ -331,6 +368,7 @@ function startMatch(seed: number, side: Side, online: boolean) {
   matchRecorded = false;
   hud.clearLog();
   hud.hideOverlay();
+  hud.setMode(online ? `VS HUMANO · ${net?.code ?? ''}` : 'VS ABISMO');
   hud.log('Chequeo de inmersión completo. Reactor en susurro.', 'me');
   if (online) {
     hud.log('Hay otro humano en esta fosa. Peor todavía: te está buscando.', 'contact');
@@ -340,7 +378,15 @@ function startMatch(seed: number, side: Side, online: boolean) {
   hud.log('Encontralo. En silencio.', 'me');
   refreshHud();
   busy = false;
-  hud.hint(defaultHint());
+  let coached = true;
+  try { coached = !!localStorage.getItem('deadping.coached'); } catch { /* ok */ }
+  if (!coached && !online) {
+    coachStep = 0;
+    hud.hint('› ' + COACH[coachStep++]);
+  } else {
+    coachStep = -1;
+    hud.hint(defaultHint());
+  }
 }
 
 function newSeed(): number {
@@ -439,6 +485,7 @@ function showTitle() {
   busy = true;
   state = null;
   scope.state = null;
+  hud.setMode('');
   hud.showOverlay(`
     <div class="screen">
       <h1 class="title">DEAD PING</h1>
@@ -446,15 +493,15 @@ function showTitle() {
       <p class="lore">En algún lugar de esta fosa hay otro cazador.<br/>
       Ninguno de los dos puede ver. Los dos pueden oír.</p>
       <div class="howto">
-        <div><b>DERIVA</b> moverse 1 casilla — silencio total</div>
-        <div><b>ACELERÓN</b> moverse 2-3 en línea — deja cavitación en tu origen</div>
-        <div><b>ESCUCHAR</b> quedarse quieto — oís el rumbo del enemigo</div>
-        <div><b>PING</b> ves su casilla exacta — ellos escuchan la tuya</div>
-        <div><b>TORPEDO</b> volás una casilla a ≤4 — 2 daño directo, 1 de onda</div>
-        <div><b>SEÑUELO</b> ruido falso y te escabullís — ×2 por inmersión</div>
+        <div><b>→ DERIVA</b> 1 casilla · <i class="q">silencio</i></div>
+        <div><b>≫ ACELERÓN</b> 2-3 casillas · <i class="l">ruido</i></div>
+        <div><b>))) ESCUCHAR</b> quieto · oís su rumbo</div>
+        <div><b>◎ PING</b> lo ves exacto · <i class="l">te oyen</i></div>
+        <div><b>⊕ TORPEDO</b> volá una casilla a ≤4 · <i class="l">ruido</i></div>
+        <div><b>◌ SEÑUELO</b> ruido falso para engañar · ×2</div>
       </div>
-      <p class="lore dim">Las flores ámbar son sonido. Algunas son el enemigo. Otras son vents térmicos. Otras, mentiras.<br/>
-      Del turno 12 el abismo los delata a los dos. Casco: 4. Silencialo primero.</p>
+      <p class="lore dim">En el mapa: <i class="l">ámbar = sonido ajeno</i> · <i class="r">rojo = peligro</i> · <i class="q">verde = vos</i>.<br/>
+      Casco: 4. Del turno 12, el abismo los delata a los dos. Hundilo primero.</p>
       <p class="lore dim" id="lbLine">${logbookLine(loadLogbook())}</p>
       <button id="diveBtn" class="big">▶ SUMERGIRSE — VS ABISMO</button>
       <div class="netRow">

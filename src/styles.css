@@ -189,9 +189,25 @@ button.action:disabled {
   cursor: default;
 }
 
-button.action .k { font-size: 9px; color: var(--amber); }
+button.action .k {
+  font-size: 9px;
+  color: var(--ph-dim);
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+}
 button.action .n { font-size: 13px; letter-spacing: 2px; }
+button.action .n i { font-style: normal; color: var(--cream); }
 button.action .d { font-size: 9px; color: var(--ph-dim); }
+.nz { font-size: 9px; letter-spacing: 1px; }
+.nz.quiet { color: var(--ph-dim); }
+.nz.loud { color: var(--amber); }
+.lblMe { color: var(--ph) !important; }
+.lblFoe { color: var(--red) !important; }
+.howto i, .lore i { font-style: normal; }
+.q { color: var(--ph); }
+.l { color: var(--amber); }
+.r { color: var(--red); }
 
 #hint {
   min-height: 16px;

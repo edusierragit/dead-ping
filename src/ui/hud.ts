@@ -1,13 +1,18 @@
 import { ActionType, HULL_MAX, MatchState, PRESSURE_HARD, PRESSURE_SOFT, Side } from '../game/types';
 
-export const ACTIONS: { type: ActionType; key: string; name: string; desc: string }[] = [
-  { type: 'drift', key: '1', name: 'DERIVA', desc: 'moverse 1 · silencioso' },
-  { type: 'dash', key: '2', name: 'ACELERÓN', desc: 'moverse 2-3 recto · ruidoso' },
-  { type: 'listen', key: '3', name: 'ESCUCHAR', desc: 'quieto · oís su rumbo' },
-  { type: 'ping', key: '4', name: 'PING', desc: 'lo ves exacto · te escuchan' },
-  { type: 'torpedo', key: '5', name: 'TORPEDO', desc: 'disparo ≤4 · recarga 3 turnos' },
-  { type: 'decoy', key: '6', name: 'SEÑUELO', desc: 'ruido falso · te escabullís' },
+export const ACTIONS: { type: ActionType; key: string; icon: string; name: string; desc: string; noise: number }[] = [
+  { type: 'drift', key: '1', icon: '→', name: 'DERIVA', desc: 'moverse 1 casilla', noise: 0 },
+  { type: 'dash', key: '2', icon: '≫', name: 'ACELERÓN', desc: 'moverse 2-3 en línea', noise: 2 },
+  { type: 'listen', key: '3', icon: ')))', name: 'ESCUCHAR', desc: 'quieto · oís su rumbo', noise: 0 },
+  { type: 'ping', key: '4', icon: '◎', name: 'PING', desc: 'lo ves exacto', noise: 3 },
+  { type: 'torpedo', key: '5', icon: '⊕', name: 'TORPEDO', desc: 'volá una casilla a ≤4', noise: 3 },
+  { type: 'decoy', key: '6', icon: '◌', name: 'SEÑUELO', desc: 'ruido falso · ×2', noise: 0 },
 ];
+
+function noiseDots(n: number): string {
+  if (n === 0) return '<span class="nz quiet">silencio</span>';
+  return `<span class="nz loud">ruido ${'●'.repeat(n)}${'○'.repeat(3 - n)}</span>`;
+}
 
 const $ = (id: string) => document.getElementById(id)!;
 let onAction: (t: ActionType) => void = () => {};
@@ -19,7 +24,7 @@ export function init(cb: { onAction: (t: ActionType) => void }) {
     const b = document.createElement('button');
     b.className = 'action';
     b.id = `act-${a.type}`;
-    b.innerHTML = `<span class="k">[${a.key}]</span><span class="n">${a.name}</span><span class="d">${a.desc}</span>`;
+    b.innerHTML = `<span class="k">[${a.key}] ${noiseDots(a.noise)}</span><span class="n"><i>${a.icon}</i> ${a.name}</span><span class="d">${a.desc}</span>`;
     b.addEventListener('click', () => onAction(a.type));
     box.appendChild(b);
   }
@@ -61,6 +66,10 @@ export function refresh(state: MatchState, mySide: Side, enemyKnown: number, ava
 
 export function hint(text: string) {
   $('hint').textContent = text;
+}
+
+export function setMode(text: string) {
+  $('modeLabel').textContent = text;
 }
 
 export function log(text: string, cls = '') {

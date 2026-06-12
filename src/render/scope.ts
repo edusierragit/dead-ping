@@ -1,4 +1,4 @@
-import { Bloom, GRID, MatchState, Side, Vec, neighbors, other } from '../game/types';
+import { Bloom, GRID, HULL_MAX, MatchState, Side, Vec, neighbors, other } from '../game/types';
 
 export interface View {
   contacts: Bloom[];
@@ -8,8 +8,17 @@ export interface View {
   facing: number;
 }
 
-export type FxKind = 'ripple' | 'ping' | 'explosion' | 'reveal' | 'trail';
-export interface Fx { kind: FxKind; pos: Vec; from?: Vec; start: number; dur: number; big?: boolean }
+export type FxKind = 'ripple' | 'ping' | 'explosion' | 'reveal' | 'trail' | 'label';
+export interface Fx {
+  kind: FxKind;
+  pos: Vec;
+  from?: Vec;
+  start: number;
+  dur: number;
+  big?: boolean;
+  text?: string;
+  color?: string; // 'r,g,b'
+}
 
 const SIZE = 860;
 const PAD = 34;
@@ -308,39 +317,47 @@ export class Scope {
       ctx.fillText('DCY', p.x, p.y);
     }
 
+    // propeller wake while moving
+    if (this.view.subAnim) {
+      const dir = this.view.facing;
+      for (let k = 1; k <= 4; k++) {
+        ctx.fillStyle = `rgba(180,255,220,${0.4 - k * 0.08})`;
+        ctx.beginPath();
+        ctx.arc(
+          pp.x - Math.cos(dir) * (CS * 0.32 + k * 7) + Math.sin(now / 80 + k) * 2,
+          pp.y - Math.sin(dir) * (CS * 0.32 + k * 7) + Math.cos(now / 95 + k) * 2,
+          2.4 - k * 0.4, 0, Math.PI * 2,
+        );
+        ctx.fill();
+      }
+    }
+
     // the player's boat
     const bob = Math.sin(now / 600) * 1.5;
-    ctx.save();
-    ctx.translate(pp.x, pp.y + bob);
-    ctx.rotate(this.view.facing + Math.PI / 2);
-    ctx.shadowColor = 'rgba(110,255,176,0.9)';
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = '#9bffc8';
-    ctx.beginPath();
-    ctx.moveTo(0, -CS * 0.32);
-    ctx.lineTo(CS * 0.2, CS * 0.26);
-    ctx.lineTo(0, CS * 0.14);
-    ctx.lineTo(-CS * 0.2, CS * 0.26);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+    this.drawSub(pp.x, pp.y + bob, this.view.facing, {
+      dark: '#155c3e', body: '#7dffc0', sail: '#d8ffe9', glow: '110,255,176',
+    });
+
+    // hull ticks under the boat: your life, always visible where you look
+    const hull = s.subs[this.mySide].hull;
+    for (let i = 0; i < HULL_MAX; i++) {
+      const tx = pp.x - (HULL_MAX * 9) / 2 + i * 9;
+      const ty = pp.y + CS * 0.52;
+      if (i < hull) {
+        ctx.fillStyle = 'rgba(110,255,176,0.9)';
+        ctx.fillRect(tx, ty, 7, 3);
+      } else {
+        ctx.strokeStyle = 'rgba(110,255,176,0.35)';
+        ctx.strokeRect(tx + 0.5, ty + 0.5, 6, 2);
+      }
+    }
 
     // enemy revealed only when the match ends
     if (s.result) {
       const ep = this.center(s.subs[other(this.mySide)].pos);
-      ctx.save();
-      ctx.translate(ep.x, ep.y);
-      ctx.shadowColor = 'rgba(255,87,71,0.9)';
-      ctx.shadowBlur = 14;
-      ctx.fillStyle = '#ff8a78';
-      ctx.beginPath();
-      ctx.moveTo(0, -CS * 0.32);
-      ctx.lineTo(CS * 0.2, CS * 0.26);
-      ctx.lineTo(0, CS * 0.14);
-      ctx.lineTo(-CS * 0.2, CS * 0.26);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
+      this.drawSub(ep.x, ep.y, Math.PI / 2, {
+        dark: '#6b2218', body: '#ff8a78', sail: '#ffd6cc', glow: '255,87,71',
+      });
     }
 
     // effects
@@ -394,6 +411,16 @@ export class Scope {
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.stroke();
         ctx.lineWidth = 1;
+      } else if (f.kind === 'label' && f.text) {
+        const rise = t * 20;
+        const col = f.color ?? '255,180,84';
+        ctx.font = 'bold 17px ui-monospace, Consolas, monospace';
+        ctx.shadowColor = `rgba(${col},0.9)`;
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = `rgba(${col},${Math.max(0, 1 - t * 1.1)})`;
+        ctx.fillText(f.text, p.x, p.y - CS * 0.75 - rise);
+        ctx.shadowBlur = 0;
+        ctx.font = '11px ui-monospace, Consolas, monospace';
       } else if (f.kind === 'trail' && f.from) {
         const a = this.center(f.from);
         const tt = Math.min(1, t / 0.7);
@@ -417,5 +444,46 @@ export class Scope {
 
   private rect(v: Vec) {
     return { x: PAD + v.x * CS, y: PAD + v.y * CS };
+  }
+
+  // top-down submarine: teardrop hull, sail, tail fins
+  private drawSub(x: number, y: number, facing: number, c: { dark: string; body: string; sail: string; glow: string }) {
+    const ctx = this.ctx;
+    const L = CS * 0.40;
+    const W = CS * 0.15;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(facing + Math.PI / 2);
+    ctx.shadowColor = `rgba(${c.glow},0.85)`;
+    ctx.shadowBlur = 16;
+    const g = ctx.createLinearGradient(-W, 0, W, 0);
+    g.addColorStop(0, c.dark);
+    g.addColorStop(0.5, c.body);
+    g.addColorStop(1, c.dark);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(0, -L);
+    ctx.quadraticCurveTo(W, -L * 0.45, W, 0);
+    ctx.quadraticCurveTo(W, L * 0.78, 0, L);
+    ctx.quadraticCurveTo(-W, L * 0.78, -W, 0);
+    ctx.quadraticCurveTo(-W, -L * 0.45, 0, -L);
+    ctx.fill();
+    // tail fins
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = c.body;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-W * 1.7, L * 0.98);
+    ctx.lineTo(0, L * 0.55);
+    ctx.lineTo(W * 1.7, L * 0.98);
+    ctx.stroke();
+    // sail (conning tower)
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = c.sail;
+    ctx.beginPath();
+    ctx.ellipse(0, -L * 0.12, W * 0.4, L * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.lineWidth = 1;
   }
 }
