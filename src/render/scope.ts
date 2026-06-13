@@ -735,8 +735,8 @@ export class Scope {
   // spinning propeller and glowing portholes. Reads as a sub at a glance.
   private drawSub(x: number, y: number, scale: number, dirX: number, now: number, c: { dark: string; body: string; sail: string; glow: string }) {
     const ctx = this.ctx;
-    const L = CS * 0.64 * scale;
-    const H = CS * 0.20 * scale;
+    const L = CS * 0.74 * scale;
+    const H = CS * 0.23 * scale;
     ctx.save();
     ctx.translate(x, y);
     // floor shadow
@@ -745,8 +745,20 @@ export class Scope {
     ctx.ellipse(0, H * 1.7, L * 0.52, H * 0.45, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.scale(dirX, 1); // nose points along travel direction
-    ctx.shadowColor = `rgba(${c.glow},0.8)`;
-    ctx.shadowBlur = 16;
+    // forward headlight cone cutting through the dark
+    const hl = ctx.createLinearGradient(L * 0.5, 0, L * 1.9, 0);
+    hl.addColorStop(0, `rgba(${c.glow},0.20)`);
+    hl.addColorStop(1, `rgba(${c.glow},0)`);
+    ctx.fillStyle = hl;
+    ctx.beginPath();
+    ctx.moveTo(L * 0.45, -H * 0.3);
+    ctx.lineTo(L * 1.9, -H * 1.5);
+    ctx.lineTo(L * 1.9, H * 1.5);
+    ctx.lineTo(L * 0.45, H * 0.3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowColor = `rgba(${c.glow},0.85)`;
+    ctx.shadowBlur = 18;
     const g = ctx.createLinearGradient(0, -H, 0, H);
     g.addColorStop(0, c.body);
     g.addColorStop(0.55, c.body);
@@ -800,6 +812,14 @@ export class Scope {
       ctx.arc(L * (0.28 - k * 0.16), -H * 0.08, Math.max(1.4, 1.7 * scale), 0, Math.PI * 2);
       ctx.fill();
     }
+    // blinking running light atop the sail
+    const blink = (Math.sin(now / 380) > 0.6) ? 1 : 0.18;
+    ctx.fillStyle = `rgba(255,90,80,${blink})`;
+    ctx.shadowColor = 'rgba(255,90,80,0.9)';
+    ctx.shadowBlur = 8 * blink;
+    ctx.beginPath();
+    ctx.arc(L * 0.1, -H * 1.62, Math.max(1.2, 1.5 * scale), 0, Math.PI * 2);
+    ctx.fill();
     ctx.shadowBlur = 0;
     ctx.restore();
     ctx.lineWidth = 1;

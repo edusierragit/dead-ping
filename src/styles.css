@@ -336,6 +336,37 @@ button.action .d { font-size: 9px; color: var(--ph-dim); }
   text-shadow: 0 0 8px rgba(84, 232, 255, 0.35);
 }
 
+/* home as a game cover: the generated banner is the hero */
+.title-screen { max-width: 560px; }
+
+.hero {
+  position: relative;
+  width: min(360px, 64vw);
+  margin: 0 auto 4px;
+}
+
+.heroArt {
+  width: 100%;
+  display: block;
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7), 0 0 60px rgba(84, 232, 255, 0.18);
+  animation: heroFloat 6s ease-in-out infinite;
+}
+
+.heroGlow {
+  position: absolute;
+  inset: -8%;
+  border-radius: 16px;
+  background: radial-gradient(circle at 50% 42%, rgba(84, 232, 255, 0.22), transparent 62%);
+  pointer-events: none;
+  animation: titleGlow 4s ease-in-out infinite;
+  z-index: -1;
+}
+
+@keyframes heroFloat {
+  50% { transform: translateY(-6px); }
+}
+
 .title {
   font-size: 54px;
   letter-spacing: 16px;

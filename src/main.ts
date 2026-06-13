@@ -693,20 +693,22 @@ function showTitle() {
   hud.setMode('');
   hud.setTurnState('none');
   hud.showOverlay(`
-    <div class="screen">
-      <h1 class="title">DEAD PING</h1>
-      <p class="tag">El ruido te delata.</p>
-      <p class="lore">Dos submarinos a oscuras en la misma fosa. No lo ves: lo <b>oís</b>.<br/>
-      <b class="goalline">Ubicá al enemigo por su ruido y hundilo antes de que él te hunda.</b></p>
+    <div class="screen title-screen">
+      <div class="hero">
+        <img class="heroArt" src="./deadpingban.png" alt="DEAD PING" />
+        <div class="heroGlow"></div>
+      </div>
+      <p class="tag">Dos submarinos. Una fosa negra. Un solo disparo correcto.</p>
+      <p class="lore"><b class="goalline">No lo ves: lo oís.</b> Ubicalo por su ruido y hundilo antes de que él te hunda.</p>
       <div class="pillars">
-        <div><span class="pic">)))</span><b>ESCUCHÁ</b><i>cada ruido es una pista de dónde está</i></div>
-        <div><span class="pic">→</span><b>ACERCATE</b><i>en silencio, sin delatarte</i></div>
-        <div><span class="pic">⊕</span><b>HUNDILO</b><i>2 torpedos certeros y es tuyo</i></div>
+        <div><span class="pic">)))</span><b>ESCUCHÁ</b><i>cada ruido lo delata</i></div>
+        <div><span class="pic">→</span><b>ACERCATE</b><i>en silencio</i></div>
+        <div><span class="pic">⊕</span><b>HUNDILO</b><i>2 torpedos certeros</i></div>
       </div>
       <button id="diveBtn" class="big">▶ JUGAR VS IA</button>
       <div class="netRow">
         <input id="nickInput" maxlength="12" placeholder="TU APODO" autocomplete="off" spellcheck="false" value="${myNick === 'CAZADOR' ? '' : myNick}"/>
-        <button id="hostBtn" class="mid">CREAR DUELO ONLINE</button>
+        <button id="hostBtn" class="mid">⚓ CREAR DUELO ONLINE</button>
         <input id="codeInput" maxlength="4" placeholder="CÓDIGO" autocomplete="off" spellcheck="false"/>
         <button id="joinBtn" class="mid">UNIRSE</button>
       </div>
