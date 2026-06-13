@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "sim": "tsx scripts/sim.ts",
-    "e2e": "tsx scripts/e2e.ts"
+    "e2e": "tsx scripts/e2e.ts",
+    "shot": "tsx scripts/shot.ts"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

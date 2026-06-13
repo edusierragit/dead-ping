@@ -21,12 +21,16 @@ let sharedRng: Rng = mulberry32(1);
 let mode: Mode = 'ai';
 let mySide: Side = 'player';
 let busy = true;
-let pending: ActionType | null = null;
+let pending: ActionType | null = null; // targeted action awaiting a destination
+let armed: Action | null = null;       // fully chosen action awaiting CONFIRM
 let enemyKnown = HULL_MAX;
 let matchRecorded = false;
 let net: NetSession | null = null;
-let localAction: Action | null = null;
-let remoteAction: { turn: number; action: Action } | null = null;
+// lockstep netcode: my committed action for the next turn, and a buffer of the
+// opponent's actions keyed by turn. Both survive packet loss via retransmission.
+let myTurnAction: { turn: number; action: Action } | null = null;
+const remoteByTurn = new Map<number, Action>();
+let resendTimer = 0;
 let joinTimeout = 0;
 let phase: 'deploy' | 'play' = 'play';
 let mySpawn: Vec | null = null;
@@ -103,14 +107,21 @@ function refreshHud() {
   const avail = phase === 'play'
     ? availability(state)
     : { drift: false, dash: false, listen: false, ping: false, torpedo: false, decoy: false };
-  hud.refresh(state, mySide, enemyKnown, myNoise, avail);
+  scope.myNoise = myNoise;
+  hud.refresh(state, mySide, enemyKnown, avail);
 }
 
 function cancelTargeting() {
   pending = null;
+  armed = null;
   scope.targets = null;
+  scope.armed = null;
+  scope.preview = null;
   hud.setSelected(null);
-  if (!busy) hud.hint(defaultHint());
+  if (!busy && phase === 'play') {
+    hud.setTurnState(mode === 'online' ? 'yours' : 'yours');
+    hud.hint(defaultHint());
+  }
 }
 
 function leaveNet() {
@@ -118,6 +129,9 @@ function leaveNet() {
     window.clearTimeout(joinTimeout);
     joinTimeout = 0;
   }
+  stopResend();
+  myTurnAction = null;
+  remoteByTurn.clear();
   if (net) {
     try { net.leave(); } catch { /* already closed */ }
     net = null;
@@ -126,18 +140,56 @@ function leaveNet() {
 
 // ---------------- flujo de turno ----------------
 
-function selectAction(t: ActionType) {
-  if (busy || !state || phase !== 'play') return;
-  if (pending === t) {
-    cancelTargeting();
+const ACTION_NAME: Record<ActionType, string> = {
+  drift: 'MOVER', dash: 'ACELERAR', listen: 'ESCUCHAR',
+  ping: 'PING', torpedo: 'TORPEDO', decoy: 'SEÑUELO',
+};
+
+function armedCell(a: Action | null): Vec | null {
+  if (!a) return null;
+  if (a.type === 'drift' || a.type === 'dash' || a.type === 'decoy') return a.to;
+  if (a.type === 'torpedo') return a.target;
+  return null;
+}
+
+// hover a button: preview its effect on the board + noise meter, no turn spent
+function previewAction(t: ActionType | null) {
+  if (busy || phase !== 'play') {
+    scope.preview = null;
+    hud.previewNoise(null);
     return;
   }
+  const ok = t && state && availability(state)[t];
+  scope.preview = ok ? t : null;
+  hud.previewNoise(ok ? (hud.ACTIONS.find(a => a.type === t)?.noise ?? 0) : null);
+}
+
+// click an action: arm it (targeted ones first ask for a destination). Never commits.
+function selectAction(t: ActionType) {
+  if (busy || !state || phase !== 'play') return;
   const s = state;
   const p = s.subs[mySide];
   if (!availability(s)[t]) return;
   sfx.click();
-  if (t === 'listen') return commit({ type: 'listen' });
-  if (t === 'ping') return commit({ type: 'ping' });
+  if (pending === t || (armed && armed.type === t && t !== 'drift' && t !== 'dash' && t !== 'decoy' && t !== 'torpedo')) {
+    cancelTargeting();
+    return;
+  }
+  armed = null;
+  scope.armed = null;
+  if (t === 'listen' || t === 'ping') {
+    // no target needed → ready to confirm
+    pending = null;
+    scope.targets = null;
+    armed = { type: t };
+    scope.armed = armed;
+    hud.setSelected(t);
+    hud.setTurnState('confirm', ACTION_NAME[t]);
+    hud.hint(t === 'ping'
+      ? 'Escaneo TOTAL: vas a ver su casilla exacta… y él la tuya. Confirmá.'
+      : 'Te quedás quieto y oís de qué lado viene. Confirmá para escuchar.');
+    return;
+  }
   let cells: Vec[] = [];
   if (t === 'drift' || t === 'decoy') cells = driftTargets(s.map, p.pos);
   if (t === 'dash') cells = dashTargets(s.map, p.pos);
@@ -146,11 +198,21 @@ function selectAction(t: ActionType) {
   scope.targets = { cells, kind: t === 'torpedo' ? 'fire' : 'move' };
   hud.setSelected(t);
   hud.hint({
-    drift: 'Clic en una celda: deriva silenciosa.',
-    dash: 'Clic en una celda: acelerón ruidoso — la cavitación marca tu origen.',
-    torpedo: 'Clic en el blanco. 2 daño directo, 1 de onda. Disparar grita tu posición.',
-    decoy: 'El señuelo cae ACÁ. Clic en la celda a la que te escabullís.',
+    drift: 'Elegí a qué casilla derivar (silencioso).',
+    dash: 'Elegí destino: acelerón ruidoso — deja tu rastro donde estabas.',
+    torpedo: 'Elegí el blanco. 2 de daño directo, 1 al lado. Disparar grita tu posición.',
+    decoy: 'El señuelo cae donde estás. Elegí a qué casilla escabullirte.',
   }[t as 'drift' | 'dash' | 'torpedo' | 'decoy']);
+}
+
+// confirm the armed action — the only thing that actually spends a turn
+function confirmAction() {
+  if (!armed || busy || !state || phase !== 'play') return;
+  const a = armed;
+  armed = null;
+  scope.armed = null;
+  scope.preview = null;
+  commit(a);
 }
 
 function commit(action: Action) {
@@ -160,14 +222,13 @@ function commit(action: Action) {
   scope.targets = null;
   hud.setSelected(null);
   if (mode === 'online') {
-    localAction = action;
-    net?.sendAction(state.turn + 1, action);
-    if (remoteAction && remoteAction.turn === state.turn + 1) {
-      resolveNet();
-    } else {
-      hud.setTurnState('waiting');
-      hud.hint('');
-    }
+    const turn = state.turn + 1;
+    myTurnAction = { turn, action };
+    net?.sendAction(turn, action);
+    startResend();
+    hud.setTurnState('waiting');
+    hud.hint('');
+    tryResolveNet();
     return;
   }
   hud.setTurnState('resolving');
@@ -178,13 +239,36 @@ function commit(action: Action) {
   playReport(report);
 }
 
-function resolveNet() {
-  if (!state || !localAction || !remoteAction) return;
+// keep re-sending my action until the turn resolves: a single dropped packet
+// over WebRTC no longer freezes the match forever
+function startResend() {
+  stopResend();
+  resendTimer = window.setInterval(() => {
+    if (net && myTurnAction) net.sendAction(myTurnAction.turn, myTurnAction.action);
+  }, 1200);
+}
+
+function stopResend() {
+  if (resendTimer) {
+    window.clearInterval(resendTimer);
+    resendTimer = 0;
+  }
+}
+
+// resolve the current turn only when BOTH actions for state.turn+1 are in hand
+function tryResolveNet() {
+  if (!state || state.result || !myTurnAction) return;
+  const turn = myTurnAction.turn;
+  if (turn !== state.turn + 1) return;
+  const rem = remoteByTurn.get(turn);
+  if (!rem) return;
+  stopResend();
+  const mine = myTurnAction.action;
+  myTurnAction = null;
+  remoteByTurn.delete(turn);
   const actions: Record<Side, Action> = mySide === 'player'
-    ? { player: localAction, enemy: remoteAction.action }
-    : { player: remoteAction.action, enemy: localAction };
-  localAction = null;
-  remoteAction = null;
+    ? { player: mine, enemy: rem }
+    : { player: rem, enemy: mine };
   hud.setMode(modeBase());
   hud.setTurnState('resolving');
   hud.hint('');
@@ -210,12 +294,23 @@ function playReport(r: TurnReport) {
   if (pa.type === 'dash') myNoise = Math.min(3, myNoise + 2);
   if (pa.type === 'ping' || pa.type === 'torpedo') myNoise = 3;
   if (r.pressure > 0 && (r.turn % 2 === 0) === (MY === 'player')) myNoise = Math.min(3, myNoise + 1);
-  if (pa.type === 'dash') sfx.whoosh();
+  // your own loud actions paint THEIR side of the story on your map
+  if (pa.type === 'dash') {
+    sfx.whoosh();
+    if (myMove) {
+      scope.fx.push({ kind: 'ripple', pos: { ...myMove.from }, start: now, dur: 1100, big: true });
+      label('TE OYERON ACÁ', myMove.from, AMBER);
+    }
+  }
   if (pa.type === 'ping') {
     sfx.ping();
     scope.fx.push({ kind: 'ping', pos: { ...s.subs[MY].pos }, start: now, dur: 1400 });
+    label('TE OYERON', s.subs[MY].pos, AMBER);
   }
-  if (pa.type === 'torpedo') sfx.launch();
+  if (pa.type === 'torpedo') {
+    sfx.launch();
+    label('TE OYERON', s.subs[MY].pos, AMBER);
+  }
   if (pa.type === 'decoy') sfx.click();
 
   const T = (ms: number, fn: () => void) => window.setTimeout(fn, ms);
@@ -376,8 +471,13 @@ function startMatch(seed: number, side: Side, online: boolean) {
   sharedRng = mulberry32(seed >>> 0);
   state = createMatch(sharedRng);
   brain = online ? null : new AiBrain('enemy', state);
-  localAction = null;
-  remoteAction = null;
+  myTurnAction = null;
+  remoteByTurn.clear();
+  stopResend();
+  armed = null;
+  pending = null;
+  scope.armed = null;
+  scope.preview = null;
   scope.state = state;
   scope.mySide = side;
   scope.view = emptyView();
@@ -401,27 +501,49 @@ function startMatch(seed: number, side: Side, online: boolean) {
   };
   busy = false;
   hud.setTurnState('deploy');
-  hud.hint('› Clic en tu zona iluminada.');
+  hud.hint('› Objetivo: hundir al enemigo. Empezá eligiendo tu posición (clic en tu zona).');
+}
+
+// glide the boat to a new cell instead of teleporting
+function glideTo(to: Vec) {
+  if (!state) return;
+  const from = { ...state.subs[mySide].pos };
+  state.subs[mySide].pos = { ...to };
+  if (!eq(from, to)) {
+    scope.view.subAnim = { from, to: { ...to }, start: performance.now(), dur: 420 };
+    scope.view.facing = Math.atan2(to.y - from.y, to.x - from.x);
+  }
 }
 
 function handleSpawn(cell: Vec) {
   if (!state || phase !== 'deploy' || mySpawn) return;
   mySpawn = { ...cell };
   sfx.click();
+  glideTo(cell);
   if (mode === 'online') {
     net?.sendSpawn(mySpawn);
+    startSpawnResend();
     scope.targets = null;
     hud.setTurnState('waiting');
-    hud.hint('');
+    hud.hint('— esperando que el rival se posicione —');
     tryStartPlay();
   } else {
-    state.subs[mySide].pos = { ...mySpawn };
     beginPlay();
   }
 }
 
+// resend spawn until both are placed: a dropped deploy packet won't hang the match
+function startSpawnResend() {
+  stopResend();
+  resendTimer = window.setInterval(() => {
+    if (net && mySpawn && phase === 'deploy') net.sendSpawn(mySpawn);
+    else stopResend();
+  }, 1200);
+}
+
 function tryStartPlay() {
   if (!state || phase !== 'deploy' || !mySpawn || !theirSpawn) return;
+  stopResend();
   state.subs[mySide].pos = { ...mySpawn };
   state.subs[other(mySide)].pos = { ...theirSpawn };
   beginPlay();
@@ -525,10 +647,14 @@ function joinGame(code: string) {
 
 function wireNet(session: NetSession) {
   session.onAction((turn, action) => {
-    if (!state || state.result) return;
-    remoteAction = { turn, action };
-    if (localAction && turn === state.turn + 1) resolveNet();
-    else if (phase === 'play') hud.setMode(modeBase() + ' · ¡YA MOVIÓ!');
+    if (!state) return;
+    remoteByTurn.set(turn, action);
+    if (state.result) return;
+    if (myTurnAction && myTurnAction.turn === turn) {
+      tryResolveNet();
+    } else if (phase === 'play' && turn === state.turn + 1) {
+      hud.setMode(modeBase() + ' · ¡YA MOVIÓ!');
+    }
   });
   session.onSpawn(v => {
     theirSpawn = { x: v.x, y: v.y };
@@ -570,11 +696,12 @@ function showTitle() {
     <div class="screen">
       <h1 class="title">DEAD PING</h1>
       <p class="tag">El ruido te delata.</p>
-      <p class="lore">Dos submarinos. Una fosa negra. Un disparo correcto.</p>
+      <p class="lore">Dos submarinos a oscuras en la misma fosa. No lo ves: lo <b>oís</b>.<br/>
+      <b class="goalline">Ubicá al enemigo por su ruido y hundilo antes de que él te hunda.</b></p>
       <div class="pillars">
-        <div><span class="pic">→</span><b>MOVETE</b><i>en silencio</i></div>
-        <div><span class="pic">◉</span><b>ESCUCHÁ</b><i>cada ruido es una pista</i></div>
-        <div><span class="pic">⊕</span><b>HUNDILO</b><i>antes de que te oiga</i></div>
+        <div><span class="pic">)))</span><b>ESCUCHÁ</b><i>cada ruido es una pista de dónde está</i></div>
+        <div><span class="pic">→</span><b>ACERCATE</b><i>en silencio, sin delatarte</i></div>
+        <div><span class="pic">⊕</span><b>HUNDILO</b><i>2 torpedos certeros y es tuyo</i></div>
       </div>
       <button id="diveBtn" class="big">▶ JUGAR VS IA</button>
       <div class="netRow">
@@ -680,16 +807,26 @@ canvas.addEventListener('click', e => {
     if (cell && scope.targets?.cells.some(v => eq(v, cell))) handleSpawn(cell);
     return;
   }
+  // clicking the already-armed destination confirms it
+  const ac = armedCell(armed);
+  if (ac && cell && eq(cell, ac)) {
+    confirmAction();
+    return;
+  }
   if (!pending) return;
   if (!cell || !scope.targets?.cells.some(v => eq(v, cell))) {
     cancelTargeting();
     return;
   }
+  // arm the chosen destination — do NOT spend the turn yet
   const t = pending;
-  if (t === 'drift') commit({ type: 'drift', to: cell });
-  else if (t === 'dash') commit({ type: 'dash', to: cell });
-  else if (t === 'decoy') commit({ type: 'decoy', to: cell });
-  else if (t === 'torpedo') commit({ type: 'torpedo', target: cell });
+  if (t === 'drift') armed = { type: 'drift', to: cell };
+  else if (t === 'dash') armed = { type: 'dash', to: cell };
+  else if (t === 'decoy') armed = { type: 'decoy', to: cell };
+  else if (t === 'torpedo') armed = { type: 'torpedo', target: cell };
+  scope.armed = armed;
+  hud.setTurnState('confirm', ACTION_NAME[t]);
+  hud.hint('Clic de nuevo en la casilla, o ⏎, para confirmar. ESC cambia.');
 });
 
 canvas.addEventListener('mousemove', e => {
@@ -702,11 +839,18 @@ window.addEventListener('keydown', e => {
     cancelTargeting();
     return;
   }
+  if (e.key === 'Enter' || e.key === ' ') {
+    if (armed) {
+      e.preventDefault();
+      confirmAction();
+    }
+    return;
+  }
   const a = hud.ACTIONS.find(x => x.key === e.key);
   if (a) selectAction(a.type);
 });
 
-hud.init({ onAction: selectAction });
+hud.init({ onAction: selectAction, onPreview: previewAction, onConfirm: confirmAction });
 showTitle();
 
 // joining by shared link: ?sala=CODE → pick your nick first, then dive

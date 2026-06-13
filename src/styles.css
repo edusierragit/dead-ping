@@ -271,6 +271,29 @@ button.action .d { font-size: 9px; color: var(--ph-dim); }
 .ts-res { color: var(--ph-dim); }
 .ts-none { display: none; }
 
+/* armed-and-ready: the confirm affordance must read as "press me" */
+.ts-confirm {
+  color: #04140d;
+  background: var(--ph);
+  border-color: var(--ph) !important;
+  cursor: pointer;
+  font-weight: bold;
+  box-shadow: 0 0 18px rgba(84, 232, 255, 0.5);
+  animation: tsConfirm 1s ease-in-out infinite;
+}
+
+@keyframes tsConfirm {
+  50% { box-shadow: 0 0 28px rgba(84, 232, 255, 0.8); }
+}
+
+.pips.noise span.ghost {
+  background: rgba(255, 180, 84, 0.4);
+  box-shadow: 0 0 8px rgba(255, 180, 84, 0.4);
+  animation: blink 0.9s infinite;
+}
+
+.goalline { color: var(--amber); }
+
 #log {
   font-size: 13px;
   line-height: 1.7;
@@ -419,6 +442,7 @@ button.mid:hover {
 
 .netRow {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   justify-content: center;
   align-items: stretch;
@@ -485,4 +509,20 @@ button.mid:hover {
   #scopeWrap { max-width: 96vw; width: min(96vw, 72vh); height: auto; }
   #panel { width: min(96vw, 640px); }
   #log { max-height: 200px; }
+}
+
+/* phones: shrink the cover so the menu fits without scrolling past the fold */
+@media (max-width: 560px) {
+  .screen { padding: 18px 14px; }
+  .title { font-size: 34px; letter-spacing: 8px; }
+  .lore { font-size: 12px; }
+  .pillars { grid-template-columns: 1fr; gap: 10px; margin: 16px 0 8px; }
+  .pillars .pic { font-size: 24px; }
+  button.big { font-size: 15px; letter-spacing: 3px; padding: 12px 22px; width: 100%; }
+  .netRow { flex-direction: column; }
+  .netRow input, .netRow button { width: 100%; }
+  #codeInput { width: 100%; }
+  .roomCode { font-size: 40px; letter-spacing: 12px; padding-left: 12px; }
+  .stats { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .stats b { font-size: 15px; }
 }

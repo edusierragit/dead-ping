@@ -1,4 +1,4 @@
-import { Bloom, GRID, HULL_MAX, MatchState, OCTANTS, Side, Vec, neighbors, other } from '../game/types';
+import { Action, ActionType, Bloom, GRID, HULL_MAX, MatchState, OCTANTS, Side, Vec, neighbors, other } from '../game/types';
 
 export interface View {
   contacts: Bloom[];
@@ -64,9 +64,12 @@ export class Scope {
   private canvas: HTMLCanvasElement;
   state: MatchState | null = null;
   mySide: Side = 'player';
+  myNoise = 0; // 0-3: your recent loudness, painted as amber rings on your boat
   view: View = emptyView();
   fx: Fx[] = [];
   targets: { cells: Vec[]; kind: 'move' | 'fire' } | null = null;
+  preview: ActionType | null = null; // hover ghost
+  armed: Action | null = null;       // chosen action awaiting confirm
   hover: Vec | null = null;
   private shake = { until: 0, mag: 0 };
 
@@ -169,6 +172,24 @@ export class Scope {
       ctx.fillRect(x, y, sz, sz);
     }
 
+    // trench walls: the arena sits inside a crevice, not a void
+    for (const side of [-1, 1]) {
+      ctx.fillStyle = '#020a12';
+      ctx.beginPath();
+      const x0 = side === -1 ? 0 : SIZE;
+      ctx.moveTo(x0, 0);
+      for (let k = 0; k <= 8; k++) {
+        const yy = (k / 8) * SIZE;
+        const depth = SIZE * (0.05 + hash(k * 13 + (side === -1 ? 0 : 50)) * 0.09) * (1 + yy / SIZE * 0.5);
+        ctx.lineTo(x0 + side * -depth, yy);
+      }
+      ctx.lineTo(x0, SIZE);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(90,190,230,0.10)';
+      ctx.stroke();
+    }
+
     this.drawJellies(now);
 
     const s = this.state;
@@ -178,23 +199,61 @@ export class Scope {
       return;
     }
 
-    // --- the sonar plane ---
-    // floor glow
-    const fg = ctx.createRadialGradient(CX, ROWY[GRID] * 0.92, 40, CX, ROWY[GRID] * 0.92, SIZE * 0.75);
-    fg.addColorStop(0, 'rgba(20,90,130,0.20)');
-    fg.addColorStop(1, 'rgba(20,90,130,0)');
-    ctx.fillStyle = fg;
-    ctx.beginPath();
+    // --- the sonar plane: a lit sand arena on the trench floor ---
     const tl = project(0, 0);
     const tr = project(GRID, 0);
     const br = project(GRID, GRID);
     const bl = project(0, GRID);
-    ctx.moveTo(tl.x, tl.y);
-    ctx.lineTo(tr.x, tr.y);
-    ctx.lineTo(br.x, br.y);
-    ctx.lineTo(bl.x, bl.y);
-    ctx.closePath();
+    const plane = () => {
+      ctx.beginPath();
+      ctx.moveTo(tl.x, tl.y);
+      ctx.lineTo(tr.x, tr.y);
+      ctx.lineTo(br.x, br.y);
+      ctx.lineTo(bl.x, bl.y);
+      ctx.closePath();
+    };
+    // sand base
+    plane();
+    ctx.fillStyle = '#06141f';
     ctx.fill();
+    // pooled light
+    const fg = ctx.createRadialGradient(CX, ROWY[GRID] * 0.88, 40, CX, ROWY[GRID] * 0.88, SIZE * 0.78);
+    fg.addColorStop(0, 'rgba(30,110,150,0.28)');
+    fg.addColorStop(1, 'rgba(30,110,150,0)');
+    ctx.fillStyle = fg;
+    plane();
+    ctx.fill();
+    // caustic shimmer drifting across the sand
+    ctx.save();
+    plane();
+    ctx.clip();
+    for (let k = 0; k < 3; k++) {
+      const cxx = CX + Math.sin(now / (5200 + k * 1700) + k * 2.1) * SIZE * 0.32;
+      const cyy = TOP + ((now / (90 + k * 25)) % (SIZE - TOP));
+      const cg = ctx.createRadialGradient(cxx, cyy, 4, cxx, cyy, 130);
+      cg.addColorStop(0, 'rgba(140,230,255,0.045)');
+      cg.addColorStop(1, 'rgba(140,230,255,0)');
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.ellipse(cxx, cyy, 130, 60, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // sand speckles
+    for (let k = 0; k < 130; k++) {
+      const p = project(hash(k * 3) * GRID, hash(k * 7 + 1) * GRID);
+      ctx.fillStyle = `rgba(150,210,235,${0.03 + hash(k * 11) * 0.06})`;
+      ctx.fillRect(p.x, p.y, 1.4 * p.s, 1.4 * p.s);
+    }
+    ctx.restore();
+    // glowing rim: the arena reads as a place, not a wireframe
+    ctx.shadowColor = 'rgba(86,200,255,0.55)';
+    ctx.shadowBlur = 14;
+    ctx.strokeStyle = 'rgba(86,200,255,0.35)';
+    ctx.lineWidth = 1.5;
+    plane();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 1;
 
     // grid lines (converging with perspective)
     ctx.lineWidth = 1;
@@ -323,6 +382,9 @@ export class Scope {
       }
     }
 
+    // --- action preview / armed visualization (teaches what each action does) ---
+    this.drawActionViz(pp, now);
+
     // --- sound contacts: amber distortion blooming on the floor ---
     for (const c of this.view.contacts) {
       const age = s.turn - c.turn;
@@ -342,6 +404,15 @@ export class Scope {
       if (c.kind !== 'murmur') {
         ctx.strokeStyle = `rgba(${col},${alpha * 0.28})`;
         this.floorEllipse(p.x, p.y, r * 1.7, true);
+      }
+      // fresh signals are born with their name: the board teaches its own language
+      if (age === 0) {
+        ctx.fillStyle = `rgba(${col},0.85)`;
+        ctx.font = `${Math.round(9 * p.s)}px ui-monospace, Consolas, monospace`;
+        ctx.fillText(
+          c.kind === 'murmur' ? 'ruido' : c.kind === 'cavitation' ? 'algo corrió' : '¡GRITO!',
+          p.x, p.y + r + 11 * p.s,
+        );
       }
       ctx.lineWidth = 1;
     }
@@ -443,6 +514,22 @@ export class Scope {
     this.drawSub(pp.x, pp.y + bob, pp.s, dirX, now, {
       dark: '#0b4a63', body: '#54e8ff', sail: '#d8f8ff', glow: '84,232,255',
     });
+
+    // your exposure made visible: amber sound rings radiate from a loud hull
+    if (this.myNoise > 0 && !s.result) {
+      for (let i = 0; i < this.myNoise; i++) {
+        const ph = ((now / 1100) + i / this.myNoise) % 1;
+        ctx.strokeStyle = `rgba(255,180,84,${(1 - ph) * (0.16 + this.myNoise * 0.1)})`;
+        ctx.lineWidth = 1.5;
+        this.floorEllipse(pp.x, pp.y, CS * pp.s * (0.5 + ph * (0.7 + this.myNoise * 0.5)), true);
+      }
+      ctx.lineWidth = 1;
+      if (this.myNoise >= 2) {
+        ctx.fillStyle = 'rgba(255,180,84,0.85)';
+        ctx.font = `bold ${Math.round(10 * pp.s)}px ui-monospace, Consolas, monospace`;
+        ctx.fillText(this.myNoise >= 3 ? '¡TE ESCUCHAN!' : 'te oyeron', pp.x, pp.y + CS * 0.72 * pp.s);
+      }
+    }
 
     // hull ticks under the boat
     const hull = s.subs[this.mySide].hull;
@@ -554,6 +641,94 @@ export class Scope {
     ctx.fillRect(0, 0, SIZE, SIZE * 0.42);
 
     ctx.restore();
+  }
+
+  // preview (hover) + armed action: show on the board what an action will do
+  private drawActionViz(pp: { x: number; y: number; s: number }, now: number) {
+    const ctx = this.ctx;
+    const pulse = 0.5 + 0.5 * Math.sin(now / 240);
+
+    // 1. armed action gets a strong, pulsing commitment marker
+    if (this.armed) {
+      const a = this.armed;
+      if (a.type === 'listen') { this.ghostListen(pp, now, 0.9); return; }
+      if (a.type === 'ping') { this.ghostPing(pp, now, 0.9); return; }
+      const cell = a.type === 'torpedo' ? a.target : a.type === 'drift' || a.type === 'dash' || a.type === 'decoy' ? a.to : null;
+      if (!cell) return;
+      const fire = a.type === 'torpedo';
+      const col = fire ? '255,87,71' : '84,232,255';
+      const c = this.center(cell);
+      ctx.strokeStyle = `rgba(${col},0.5)`;
+      ctx.setLineDash([4, 5]);
+      ctx.beginPath();
+      ctx.moveTo(pp.x, pp.y);
+      ctx.lineTo(c.x, c.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      this.cellPath(cell, 0.06);
+      ctx.fillStyle = `rgba(${col},${0.28 + 0.22 * pulse})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${col},0.9)`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.lineWidth = 1;
+      if (fire) {
+        for (const n of neighbors(cell)) {
+          this.cellPath(n, 0.24);
+          ctx.fillStyle = `rgba(${col},0.14)`;
+          ctx.fill();
+        }
+      }
+      return;
+    }
+
+    // 2. hover preview: faint ghost of the hovered action
+    if (!this.preview) return;
+    const t = this.preview;
+    if (t === 'listen') { this.ghostListen(pp, now, 0.4); return; }
+    if (t === 'ping') { this.ghostPing(pp, now, 0.4); return; }
+    const ring = (cells: number, rgb: string) => {
+      ctx.strokeStyle = `rgba(${rgb},0.5)`;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 6]);
+      this.floorEllipse(pp.x, pp.y, cells * CS * pp.s, true);
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1;
+    };
+    if (t === 'drift' || t === 'decoy') ring(1, '84,232,255');
+    if (t === 'dash') { ring(2, '84,232,255'); ring(3, '84,232,255'); }
+    if (t === 'torpedo') ring(4, '255,87,71');
+  }
+
+  // quiet listening: soft concentric "ears" — silent, safe
+  private ghostListen(pp: { x: number; y: number; s: number }, now: number, alpha: number) {
+    const ctx = this.ctx;
+    for (let k = 0; k < 3; k++) {
+      const t = ((now / 1400) + k / 3) % 1;
+      ctx.strokeStyle = `rgba(140,255,220,${alpha * (1 - t) * 0.5})`;
+      ctx.lineWidth = 1.5;
+      this.floorEllipse(pp.x, pp.y, (0.6 + t * 1.8) * CS * pp.s, true);
+    }
+    ctx.lineWidth = 1;
+    ctx.fillStyle = `rgba(140,255,220,${alpha * 0.85})`;
+    ctx.font = `${Math.round(10 * pp.s)}px ui-monospace, Consolas, monospace`;
+    ctx.fillText('escuchar · silencioso', pp.x, pp.y - CS * 0.95 * pp.s);
+  }
+
+  // active sonar: one huge loud ring sweeping the whole arena — exposes you
+  private ghostPing(pp: { x: number; y: number; s: number }, now: number, alpha: number) {
+    const ctx = this.ctx;
+    const t = (now / 900) % 1;
+    ctx.strokeStyle = `rgba(255,180,84,${alpha * (1 - t) * 0.7})`;
+    ctx.lineWidth = 2.5;
+    this.floorEllipse(pp.x, pp.y, t * SIZE * 0.75, true);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = `rgba(255,180,84,${alpha * 0.4})`;
+    this.floorEllipse(pp.x, pp.y, SIZE * 0.7, true);
+    ctx.lineWidth = 1;
+    ctx.fillStyle = `rgba(255,180,84,${alpha})`;
+    ctx.font = `bold ${Math.round(10 * pp.s)}px ui-monospace, Consolas, monospace`;
+    ctx.fillText('PING · TE OYEN A VOS', pp.x, pp.y - CS * 0.95 * pp.s);
   }
 
   // side-profile submarine billboard: hull, sail, periscope, tail fin,

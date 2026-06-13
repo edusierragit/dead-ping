@@ -26,9 +26,17 @@ const TIPS: Record<ActionType, string> = {
 
 const $ = (id: string) => document.getElementById(id)!;
 let onAction: (t: ActionType) => void = () => {};
+let onPreview: (t: ActionType | null) => void = () => {};
+let onConfirm: () => void = () => {};
 
-export function init(cb: { onAction: (t: ActionType) => void }) {
+export function init(cb: {
+  onAction: (t: ActionType) => void;
+  onPreview: (t: ActionType | null) => void;
+  onConfirm: () => void;
+}) {
   onAction = cb.onAction;
+  onPreview = cb.onPreview;
+  onConfirm = cb.onConfirm;
   const box = $('actions');
   for (const a of ACTIONS) {
     const b = document.createElement('button');
@@ -37,8 +45,12 @@ export function init(cb: { onAction: (t: ActionType) => void }) {
     b.innerHTML = `<span class="k">[${a.key}] ${noiseDots(a.noise)}</span><span class="n"><i>${a.icon}</i> ${a.name}</span><span class="d">${a.desc}</span>`;
     b.title = TIPS[a.type];
     b.addEventListener('click', () => onAction(a.type));
+    // hover a button to preview its effect on the board — explore without spending a turn
+    b.addEventListener('mouseenter', () => onPreview(a.type));
+    b.addEventListener('mouseleave', () => onPreview(null));
     box.appendChild(b);
   }
+  $('turnState').addEventListener('click', () => onConfirm());
 }
 
 export function setSelected(t: ActionType | null) {
@@ -56,10 +68,9 @@ function pips(el: HTMLElement, val: number, max = HULL_MAX) {
   }
 }
 
-export function refresh(state: MatchState, mySide: Side, enemyKnown: number, myNoise: number, avail: Record<ActionType, boolean>) {
+export function refresh(state: MatchState, mySide: Side, enemyKnown: number, avail: Record<ActionType, boolean>) {
   pips($('hullPlayer'), state.subs[mySide].hull);
   pips($('hullEnemy'), enemyKnown);
-  pips($('noiseBar'), myNoise, 3);
   $('turnLabel').textContent = `T-${String(state.turn + 1).padStart(2, '0')}`;
   const next = state.turn + 1;
   const pl = $('pressureLabel');
@@ -83,6 +94,15 @@ export function refresh(state: MatchState, mySide: Side, enemyKnown: number, myN
   }
 }
 
+// hovering an action ghosts onto the RUIDO meter how loud it would make you
+export function previewNoise(level: number | null) {
+  const bar = $('noiseBar');
+  const spans = Array.from(bar.children) as HTMLElement[];
+  spans.forEach((s, i) => {
+    s.classList.toggle('ghost', level != null && i < level && !s.classList.contains('full'));
+  });
+}
+
 export function hint(text: string) {
   $('hint').textContent = text;
 }
@@ -91,15 +111,16 @@ export function setMode(text: string) {
   $('modeLabel').textContent = text;
 }
 
-export type TurnState = 'yours' | 'waiting' | 'resolving' | 'deploy' | 'none';
+export type TurnState = 'yours' | 'waiting' | 'resolving' | 'deploy' | 'confirm' | 'none';
 
-export function setTurnState(kind: TurnState) {
+export function setTurnState(kind: TurnState, label = '') {
   const el = $('turnState');
   const map: Record<TurnState, [string, string]> = {
     yours: ['▶ TU TURNO — ELEGÍ ACCIÓN', 'ts-yours'],
     waiting: ['⌛ ESPERANDO AL RIVAL…', 'ts-wait'],
     resolving: ['··· RESOLVIENDO ···', 'ts-res'],
     deploy: ['⚓ ELEGÍ TU POSICIÓN INICIAL', 'ts-yours'],
+    confirm: [`✓ CONFIRMAR: ${label}  ⏎`, 'ts-confirm'],
     none: ['', 'ts-none'],
   };
   el.textContent = map[kind][0];
